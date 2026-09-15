@@ -113,7 +113,7 @@ export function FilamentRoom() {
               void engine.runDemo(line);
             }}
           >
-            Demo line
+            Test line
           </Button>
           <Button variant="ghost" onClick={() => fileRef.current?.click()}>
             <Upload />

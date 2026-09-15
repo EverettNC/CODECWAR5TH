@@ -10,12 +10,12 @@ import { engine as dispersionEngine } from "@/lib/audio/engine";
 import { hydrateStudio, persistStudio, useStudio, type Room } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-const ROOMS: { id: Room; label: string; role: string }[] = [
-  { id: "filament", label: "Filament", role: "in" },
-  { id: "codec", label: "Codec", role: "middle" },
-  { id: "booth", label: "Booth", role: "out" },
-  { id: "dispersion", label: "Dispersion", role: "canals" },
-  { id: "war", label: "War", role: "proof" },
+const ROOMS: { id: Room; label: string }[] = [
+  { id: "filament", label: "Filament" },
+  { id: "codec", label: "Codec" },
+  { id: "booth", label: "Booth" },
+  { id: "dispersion", label: "Dispersion" },
+  { id: "war", label: "War" },
 ];
 
 export function Studio() {
@@ -59,15 +59,17 @@ export function Studio() {
     setRoom(next);
   };
 
+  const current = ROOMS.find((r) => r.id === room);
+
   return (
     <div className="flex min-h-dvh flex-col overflow-x-clip bg-bg text-fg">
-      <header className="border-b border-border px-4 py-4 sm:px-6">
+      <header className="border-b border-border px-4 py-3 sm:px-6">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="font-mono text-xs tracking-widest text-subtle uppercase">Studio</p>
-            <h1 className="text-lg font-semibold tracking-widest text-fg uppercase">Codec War</h1>
+            <p className="font-mono text-xs text-subtle">workbench</p>
+            <h1 className="text-base font-semibold text-fg">Codec War</h1>
           </div>
-          <nav className="hidden items-center lg:flex" aria-label="Pipeline">
+          <nav className="hidden items-center lg:flex" aria-label="Stations">
             {ROOMS.map((r, i) => (
               <div key={r.id} className="flex items-center">
                 {r.id === "war" ? (
@@ -80,7 +82,7 @@ export function Studio() {
                   onClick={() => go(r.id)}
                   aria-current={room === r.id ? "page" : undefined}
                   className={cn(
-                    "h-11 rounded-md px-3 text-sm transition-colors duration-[var(--motion-quick)]",
+                    "h-11 rounded-sm px-3 text-sm transition-colors duration-[var(--motion-quick)]",
                     room === r.id ? "bg-linen text-bg" : "text-muted hover:bg-elevated hover:text-fg",
                   )}
                 >
@@ -89,18 +91,15 @@ export function Studio() {
               </div>
             ))}
           </nav>
-          <p className="hidden font-mono text-xs text-subtle sm:block lg:hidden">5 rooms</p>
-          <p className="hidden font-mono text-xs text-subtle lg:block">
+          <p className="hidden font-mono text-xs text-subtle sm:block">
             {listening ? (
-              <span className="text-signal">filament live</span>
-            ) : room === "war" ? (
-              "the mix loses sources"
+              <span className="text-signal">filament open</span>
             ) : (
-              "in · middle · out · canals · proof"
+              current?.label ?? "Codec War"
             )}
           </p>
         </div>
-        <nav className="mx-auto mt-3 hidden max-w-6xl min-w-0 items-center overflow-x-auto sm:flex lg:hidden" aria-label="Pipeline">
+        <nav className="mx-auto mt-2 hidden max-w-6xl min-w-0 items-center overflow-x-auto sm:flex lg:hidden" aria-label="Stations">
           {ROOMS.map((r, i) => (
             <div key={r.id} className="flex items-center">
               {r.id === "war" ? (
@@ -113,7 +112,7 @@ export function Studio() {
                 onClick={() => go(r.id)}
                 aria-current={room === r.id ? "page" : undefined}
                 className={cn(
-                  "h-11 rounded-md px-2.5 text-sm transition-colors duration-[var(--motion-quick)]",
+                  "h-11 rounded-sm px-2.5 text-sm transition-colors duration-[var(--motion-quick)]",
                   room === r.id ? "bg-linen text-bg" : "text-muted hover:bg-elevated hover:text-fg",
                 )}
               >
@@ -140,7 +139,7 @@ export function Studio() {
 
       <nav
         className="fixed inset-x-0 bottom-0 border-t border-border bg-bg/95 px-1.5 pt-1.5 pb-[max(2.75rem,calc(0.5rem+env(safe-area-inset-bottom)))] sm:hidden"
-        aria-label="Pipeline"
+        aria-label="Stations"
       >
         <div className="grid grid-cols-5 gap-0.5">
           {ROOMS.map((r) => (
@@ -150,14 +149,11 @@ export function Studio() {
               onClick={() => go(r.id)}
               aria-current={room === r.id ? "page" : undefined}
               className={cn(
-                "flex h-12 min-w-0 flex-col items-center justify-center rounded-md px-0.5",
+                "flex h-12 min-w-0 items-center justify-center rounded-sm px-0.5 text-xs font-medium",
                 room === r.id ? "bg-linen text-bg" : "text-muted",
               )}
             >
-              <span className="font-mono text-xs leading-none tracking-widest uppercase">{r.role}</span>
-              <span className="mt-0.5 w-full truncate text-center text-xs font-medium leading-tight">
-                {r.label}
-              </span>
+              <span className="w-full truncate text-center leading-tight">{r.label}</span>
             </button>
           ))}
         </div>

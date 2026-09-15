@@ -17,7 +17,7 @@ export function Panel({
   return (
     <section
       className={cn(
-        "flex min-h-0 min-w-0 flex-col rounded-xl bg-surface p-4 shadow-[var(--shadow-border)]",
+        "flex min-h-0 min-w-0 flex-col rounded-sm bg-surface p-4 shadow-[var(--shadow-border)]",
         className,
       )}
     >
@@ -25,7 +25,7 @@ export function Panel({
         <header className="mb-3 flex items-baseline justify-between gap-3">
           <div>
             {kicker ? (
-              <p className="font-mono text-xs tracking-widest text-subtle uppercase">
+              <p className="font-mono text-xs tracking-wide text-subtle uppercase">
                 {kicker}
               </p>
             ) : null}
@@ -52,7 +52,7 @@ export function Stat({
 }) {
   return (
     <div className="min-w-0">
-      <p className="font-mono text-xs tracking-widest text-subtle uppercase">{label}</p>
+      <p className="font-mono text-xs tracking-wide text-subtle uppercase">{label}</p>
       <p
         className={cn(
           "mt-1 truncate font-mono text-sm tabular-nums",

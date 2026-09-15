@@ -1,36 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Upload } from "lucide-react";
 import { Panel, Stat } from "@/components/panel";
 import { Button } from "@/components/ui/button";
 import { Waveform } from "@/components/waveform";
-import { FRAME_SEC } from "@/lib/audio/dsp";
 import { engine } from "@/lib/audio/codec-engine";
-import { forceAlign } from "@/lib/audio/recognize";
 import { DEMO_LINE, useStudio } from "@/lib/store";
 import { cn } from "@/lib/utils";
-
-type Recog = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((ev: { resultIndex: number; results: ResultList }) => void) | null;
-  onerror: ((ev: { error: string }) => void) | null;
-  onend: (() => void) | null;
-};
-type ResultList = ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
-
-function getRecog(): Recog | null {
-  if (typeof window === "undefined") return null;
-  const W = window as unknown as {
-    SpeechRecognition?: new () => Recog;
-    webkitSpeechRecognition?: new () => Recog;
-  };
-  const Ctor = W.SpeechRecognition || W.webkitSpeechRecognition;
-  return Ctor ? new Ctor() : null;
-}
 
 export function FilamentRoom() {
   const listening = useStudio((s) => s.listening);
@@ -42,9 +17,7 @@ export function FilamentRoom() {
   const setRoom = useStudio((s) => s.setRoom);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const recogRef = useRef<Recog | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const hostRef = useRef(false);
 
   useEffect(() => {
     return engine.subscribe(() => setTick((n) => n + 1));
@@ -52,7 +25,6 @@ export function FilamentRoom() {
 
   useEffect(() => {
     return () => {
-      recogRef.current?.abort();
       void engine.stopMic();
     };
   }, []);
@@ -60,17 +32,10 @@ export function FilamentRoom() {
   const snap = engine.snap;
   void tick;
 
-  const captions = useMemo(() => {
-    const path = snap.result?.ctcPath;
-    if (hostRef.current && text.trim() && path && path.length) {
-      return forceAlign(text, path, FRAME_SEC);
-    }
-    return snap.aligned;
-  }, [text, snap.result, snap.aligned]);
+  const captions = snap.aligned;
 
   const start = async () => {
     setError(null);
-    hostRef.current = false;
     await engine.startMic();
     if (engine.lastError) {
       setError(engine.lastError);
@@ -78,58 +43,15 @@ export function FilamentRoom() {
       return;
     }
     setListening(true);
-    const rec = getRecog();
-    if (!rec) {
-      setError(null);
-      return;
-    }
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "en-US";
-    rec.onresult = (ev) => {
-      let final = "";
-      let inter = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const row = ev.results[i]!;
-        if (row.isFinal) final += row[0].transcript;
-        else inter += row[0].transcript;
-      }
-      const prev = useStudio.getState().filamentText;
-      const next = (prev + (final ? (prev ? " " : "") + final.trim() : "")).trim();
-      hostRef.current = true;
-      setFilament(next, inter.trim());
-    };
-    rec.onerror = (ev) => {
-      if (ev.error !== "no-speech" && ev.error !== "aborted") {
-        setError(ev.error);
-      }
-    };
-    rec.onend = () => {
-      if (useStudio.getState().listening) {
-        try {
-          rec.start();
-        } catch {
-          /* restart races */
-        }
-      }
-    };
-    try {
-      rec.start();
-      recogRef.current = rec;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Recognizer failed.");
-    }
   };
 
   const stop = async () => {
     setListening(false);
-    recogRef.current?.stop();
-    recogRef.current = null;
     await engine.stopMic();
   };
 
   useEffect(() => {
-    if (snap.source === "mic" && listening && !hostRef.current && snap.transcript) {
+    if (snap.source === "mic" && listening && snap.transcript) {
       setFilament(snap.transcript, "");
     }
   }, [snap.transcript, snap.source, listening, setFilament]);
@@ -231,8 +153,8 @@ export function FilamentRoom() {
         </p>
         <p className="mt-4 text-sm leading-relaxed text-muted">
           Unknown audio is decoded in this tab against the Klatt lexicon —
-          the same mouth as Booth. Times come from the encoder. Host
-          recognizer, if present, supplies the words; we align them.
+          the same mouth as Booth. Times come from the encoder. Nothing
+          leaves the box.
         </p>
       </Panel>
 

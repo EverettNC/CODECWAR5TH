@@ -53,31 +53,29 @@ export function DispersionRoom() {
     await engine.openScene(id);
   };
 
-  const onDiscern = async () => {
+  const onDiscern = () => {
     if (!snap.canals.length || discerning) return;
     setDiscerning(true);
     setDiscernment(null, null);
     try {
-      const result = await discernCanals({
-        data: {
-          canals: snap.canals.map((c) => ({
-            id: c.id,
-            name: c.name,
-            kind: c.kind,
-            line: c.line,
-            duration: c.card.duration,
-            attack: c.card.attack,
-            decay: c.card.decay,
-            peakRms: c.card.peakRms,
-            medianF0: c.card.medianF0,
-            lastF1: c.card.lastF1,
-            lastF2: c.card.lastF2,
-            meanZcr: c.card.meanZcr,
-            voiced: c.card.voiced,
-            truncated: c.card.truncated,
-          })),
-        },
-      });
+      const result = discernCanals(
+        snap.canals.map((c) => ({
+          id: c.id,
+          name: c.name,
+          kind: c.kind,
+          line: c.line,
+          duration: c.card.duration,
+          attack: c.card.attack,
+          decay: c.card.decay,
+          peakRms: c.card.peakRms,
+          medianF0: c.card.medianF0,
+          lastF1: c.card.lastF1,
+          lastF2: c.card.lastF2,
+          meanZcr: c.card.meanZcr,
+          voiced: c.card.voiced,
+          truncated: c.card.truncated,
+        })),
+      );
       if (result.ok) setDiscernment(result.text, null);
       else setDiscernment(null, result.error);
     } catch (err) {
@@ -176,7 +174,7 @@ export function DispersionRoom() {
         >
           {showFused ? "Hide refused ghost" : "Show refused ghost"}
         </Button>
-        <Button variant="outline" onClick={() => void onDiscern()} disabled={!n || discerning}>
+        <Button variant="outline" onClick={() => onDiscern()} disabled={!n || discerning}>
           {discerning ? "Discerning…" : "Discern canals"}
         </Button>
       </div>

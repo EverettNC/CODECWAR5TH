@@ -18,7 +18,7 @@ function frame(partial: Partial<Frame>): Frame {
   };
 }
 
-test("null f0 is a hole, not a zero", () => {
+test("null f0 is a hole, not zero", () => {
   const frames = [frame({ f0: 0, voiced: 0 }), frame({ f0: 0, voiced: 0.1 })];
   const card = cardFromFrames(frames);
   assert.equal(card.medianF0, null);

@@ -59,7 +59,7 @@ describe("discernCanals", () => {
     assert.equal(result.ok, true);
     if (!result.ok) return;
     assert.match(result.text, /Empty ear\. No invented speech\./);
-    assert.match(result.text, /hole, not a zero/);
+    assert.match(result.text, /hole, not zero/);
     assert.equal(result.text.includes("whistle"), false);
   });
 

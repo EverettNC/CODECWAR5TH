@@ -1,7 +1,7 @@
 /**
  * Corti card + tape from one canal's frames.
  * The ear measures. It does not classify.
- * A null f0 is a hole, not a zero. Never interpolate across it.
+ * A null f0 is a hole, not zero. Never interpolate across it.
  * Tape cap 360 drops the TAIL — the ending is gone, not the onset.
  */
 

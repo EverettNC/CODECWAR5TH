@@ -21,7 +21,7 @@ export type CanalCardIn = {
 };
 
 function hz(n: number | null): string {
-  return n == null ? "hole, not a zero" : `${Math.round(n)} Hz`;
+  return n == null ? "hole, not zero" : `${Math.round(n)} Hz`;
 }
 
 function nameCanal(c: CanalCardIn, i: number): string {

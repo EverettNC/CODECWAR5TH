@@ -117,7 +117,7 @@ export function SelectedCard() {
       </div>
       <p className="mt-4 font-mono text-xs leading-relaxed text-subtle">
         {card.truncated ? "Tape truncated. Cap dropped the tail." : "Tape intact."}{" "}
-        {card.medianF0 == null ? "F0 is a hole, not a zero." : null}
+        {card.medianF0 == null ? "F0 is a hole, not zero." : null}
       </p>
     </Panel>
   );

@@ -1,5 +1,4 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
-import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import appCss from "../styles.css?url";
 
 const APP_NAME = "Codec War";
@@ -16,12 +15,11 @@ export const Route = createRootRoute({
           "Filament in. Codec. Booth out. Dispersion keeps canals. The war is the mix.",
       },
       { name: "theme-color", content: "#0e0e0c" },
+      { property: "og:title", content: APP_NAME },
+      { property: "og:image", content: "/og.jpg" },
     ],
     links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "stylesheet", href: appCss },
-  
-
     ],
   }),
   component: () => (
@@ -30,7 +28,6 @@ export const Route = createRootRoute({
         <HeadContent />
       </head>
       <body className="bg-bg text-fg">
-        <PreviewHostBridge />
         <Outlet />
         <Scripts />
       </body>

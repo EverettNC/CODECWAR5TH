@@ -1,6 +1,7 @@
 import { extractFrames, resampleLinear, rms, SAMPLE_RATE, type Frame } from "./dsp.ts";
 import { cosine, encode, mfccMatrix, type EncoderResult } from "./encoder.ts";
 import { recognizeFrames, type AlignedWord } from "./recognize.ts";
+import { filamentHealth, filamentLive } from "./filament.ts";
 import { DEMO_LINE, synthesize } from "./synth.ts";
 
 export type Enrolled = { id: string; name: string; emb: number[] };
@@ -56,6 +57,14 @@ class AudioEngine {
   private lastRecAt = 0;
   listening = false;
   lastError: string | null = null;
+  // Real Filament streaming state (127:4850). When useFilament is false we fall
+  // back to the in-tab recognizer so the mic never depends on the door.
+  private useFilament = false;
+  private filStarted = false;
+  private filBuf: number[] = [];
+  private filLastSend = 0;
+  private filSending = false;
+  private filText = "";
 
   subscribe(fn: Listener) {
     this.listeners.add(fn);
@@ -230,6 +239,11 @@ class AudioEngine {
       await this.stopMic();
       this.stopPlayback();
       const ctx = await this.ensureCtx();
+      this.useFilament = await filamentHealth();
+      this.filStarted = false;
+      this.filBuf = [];
+      this.filLastSend = 0;
+      this.filText = "";
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -270,12 +284,21 @@ class AudioEngine {
           this.rec.set(chunk, this.recWrite);
           this.recWrite += chunk.length;
         }
-        const used = Math.min(this.recWrite, MAX_SAMPLES);
-        const pcm = this.rec.subarray(Math.max(0, used - SAMPLE_RATE * 4), used);
-        this.commit(new Float32Array(pcm), {
-          source: "mic",
-          playhead: 1,
-        });
+        if (this.useFilament) {
+          for (let k = 0; k < chunk.length; k++) this.filBuf.push(chunk[k]!);
+          const now = ev.timeStamp || Date.now();
+          if (!this.filSending && this.filBuf.length >= SAMPLE_RATE / 2) {
+            void this.flushFilament(false);
+            this.filLastSend = now;
+          }
+        } else {
+          const used = Math.min(this.recWrite, MAX_SAMPLES);
+          const pcm = this.rec.subarray(Math.max(0, used - SAMPLE_RATE * 4), used);
+          this.commit(new Float32Array(pcm), {
+            source: "mic",
+            playhead: 1,
+          });
+        }
       };
       src.connect(proc);
       proc.connect(mute);
@@ -293,7 +316,37 @@ class AudioEngine {
     }
   }
 
+  private async flushFilament(end: boolean) {
+    if (this.filSending) return;
+    const take = this.filBuf;
+    if (take.length === 0 && !end) return;
+    this.filBuf = [];
+    this.filSending = true;
+    try {
+      const reply = await filamentLive(new Float32Array(take), {
+        reset: !this.filStarted,
+        end,
+      });
+      this.filStarted = true;
+      if (reply && reply.ok) {
+        const words = (reply.text || "").trim();
+        const partial = (reply.partial || "").trim();
+        if (reply.final && words) {
+          this.filText = this.filText ? this.filText + " " + words : words;
+        }
+        const shown = partial ? (this.filText ? this.filText + " " + partial : partial) : this.filText;
+        this.snap = { ...this.snap, source: "mic", transcript: shown };
+        this.emit();
+      }
+    } finally {
+      this.filSending = false;
+    }
+  }
+
   async stopMic() {
+    if (this.useFilament && this.filStarted) {
+      try { await this.flushFilament(true); } catch { /* door closed; keep what we have */ }
+    }
     this.recoding = false;
     this.listening = false;
     try {

@@ -73,6 +73,11 @@ are joined. No invented speech.
 - Everything runs on `127.0.0.1` — the dev server and the Filament ear both.
   Nothing binds the wildcard. The app's only network call is to the local
   Filament on 4850.
+- Speech is made only by the Booth, on this machine. Text is never handed to
+  the browser's or the system's speech engine: the Booth's old "Host voice"
+  (`window.speechSynthesis`) was removed on Everett's ruling of 2026-10-28.
+  `src/lib/offline.test.ts` fails if any browser or outside speech path, or
+  any network address other than the local Filament, appears anywhere in `src`.
 - No checkpoint ships in the repo. No Kaldi. No Whisper.
 
 ## Run
@@ -80,7 +85,7 @@ are joined. No invented speech.
 ```bash
 npm install
 npm run dev        # http://127.0.0.1:9597
-npm test           # the pipeline's own suite (34 tests)
+npm test           # the pipeline's own suite
 ```
 
 The sovereign Filament ear is a separate process (THEFILAMENT, port 4850). Start

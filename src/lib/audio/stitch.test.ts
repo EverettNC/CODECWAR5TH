@@ -32,7 +32,7 @@ function measures(b: ReturnType<typeof bank>): VoiceMeasures {
   return {
     f0_median_hz: 140,
     phrase_range_st: 1,
-    syllable_rate: 4,
+    syllable_rate: 7,
     voiced_aperiodicity: 0.2,
     ltas_db: Array.from(trackLtas(b.tracks[0]!)),
     level_db: -20,
@@ -44,7 +44,7 @@ function measures(b: ReturnType<typeof bank>): VoiceMeasures {
     cpp_db: 15,
   };
 }
-const PARAMS = ["rate", "articulation", "intonation", "f0", "breath", "resonance", "timbre", "prosody", "jitter", "shimmer", "affect"];
+const PARAMS = ["rate", "cadence", "articulation", "intonation", "f0", "breath", "resonance", "timbre", "prosody", "jitter", "shimmer", "affect"];
 
 describe("selectUnits", () => {
   it("speaks recorded words whole, and a recorded run of words with no join at all", () => {
@@ -72,6 +72,19 @@ describe("selectUnits", () => {
       () => selectUnits(b, [{ word: "zoo", phones: ["Z", "UW"] }]),
       (e: unknown) => e instanceof StitchRefused && e.missing.join() === "Z",
     );
+  });
+});
+
+describe("pauses", () => {
+  it("puts the recording's own pause where the text pauses, and opens and closes phrases there", () => {
+    const b = bank();
+    const sel = selectUnits(b, [{ ...W.mass, pauseAfter: true }, W.tea]);
+    assert.deepEqual(sel.pausesAfter, [2]);
+    assert.equal(sel.joins, 0);
+    const st = joinUnits(b, sel);
+    const firstSil = st.phones.indexOf("SIL", st.phones.indexOf("S"));
+    assert.ok(firstSil > 0 && st.phones[firstSil + 1] === "SIL", "a run of pause frames after the S of mass");
+    assert.ok(b.units[sel.units[2]!]!.phraseEnd, "the word before the pause is one that closed a phrase in the recording");
   });
 });
 
@@ -113,6 +126,11 @@ describe("applyVoice", () => {
     assert.ok(sum(run({ breath: 1 }).track.ap) > sum(base.track.ap));
     assert.ok(voicedRange(run({ intonation: 1 }).track.f0) > voicedRange(base.track.f0));
     assert.ok(run({ rate: 1.5 }).track.n < base.track.n);
+    const sil = (v: { phones: string[] }) => v.phones.filter((p) => p === "SIL").length;
+    const fast = run({ cadence: 1 });
+    const slow = run({ cadence: 0 });
+    assert.ok(fast.phones.length - sil(fast) < base.phones.length - sil(base), "cadence 1 speaks faster");
+    assert.ok(sil(slow) > sil(base) && sil(fast) < sil(base), "cadence 0 holds pauses longer, 1 shorter");
     assert.ok(run({ articulation: 1 }).track.n > base.track.n);
     const hi = (t: Float64Array) => {
       let s = 0;

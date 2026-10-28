@@ -78,7 +78,9 @@ not join. Three views: **Field** (see them all), **Canals** (each one named),
 scenes: **Kitchen table** (Voice A, Voice B, Kettle), **Two booths** (Booth A,
 Booth B), and **Crisis overlap** (three voices at once). Press **Discern canals**
 to pull them apart; show or hide the **refused ghost** — the overlap it will not
-merge. The counter reads canals, fused, and sealed mix analysis.
+merge. The counter reads canals, fused, and whether the mix was measured: the
+mix is measured only to draw the refused ghost (its card is built once per set
+of canals, not every frame), and no canal ever reads that measurement.
 
 ### 6 · War — the mix is allowed
 The end of the line, and the room the whole thing is named for. Crisis overlap

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Waveform } from "@/components/waveform";
 import { formatHz, formatRms } from "@/lib/audio/corti";
 import { engine } from "@/lib/audio/engine";
-import { fusedClaim, sourcesKept, sourcesLost } from "@/lib/audio/war";
+import { fusedClaim, mixAnalysisLabel, sourcesKept, sourcesLost } from "@/lib/audio/war";
 import { cn } from "@/lib/utils";
 
 function inkDot(ink: "linen" | "signal" | "warn") {
@@ -81,7 +81,7 @@ export function WarRoom() {
       ) : null}
 
       <p className="font-mono text-xs tracking-widest text-subtle uppercase">
-        {n} canals · {kept} kept · {lost} lost · mix analysis sealed
+        {n} canals · {kept} kept · {lost} lost · {mixAnalysisLabel(ghost !== null)}
       </p>
 
       <Panel kicker="field" title="Crisis overlap">

@@ -2,6 +2,8 @@ import { extractFrames, resampleLinear, rms, SAMPLE_RATE, type Frame } from "./d
 import { encode, type EncoderResult } from "./encoder.ts";
 import { recognizeFrames, type AlignedWord } from "./recognize.ts";
 import { filamentHealth, filamentLive } from "./filament.ts";
+import { FilamentStream } from "./filament-stream.ts";
+import { RAW_MIC } from "./mic-tape.ts";
 import { DEMO_LINE, synthesize } from "./synth.ts";
 
 
@@ -59,11 +61,8 @@ class AudioEngine {
   // Real Filament streaming state (127:4850). When useFilament is false we fall
   // back to the in-tab recognizer so the mic never depends on the door.
   private useFilament = false;
-  private filStarted = false;
-  private filBuf: number[] = [];
-  private filLastSend = 0;
-  private filSending = false;
-  private filText = "";
+  private fil: FilamentStream | null = null;
+  private filPump: Promise<void> | null = null;
 
   subscribe(fn: Listener) {
     this.listeners.add(fn);
@@ -240,18 +239,10 @@ class AudioEngine {
       this.stopPlayback();
       const ctx = await this.ensureCtx();
       this.useFilament = await filamentHealth();
-      this.filStarted = false;
-      this.filBuf = [];
-      this.filLastSend = 0;
-      this.filText = "";
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      this.fil = this.useFilament ? new FilamentStream() : null;
+      // Raw capture: the browser's echo cancellation, noise suppression and
+      // gain would reshape the voice before it is measured.
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: RAW_MIC });
       this.stream = stream;
       const src = ctx.createMediaStreamSource(stream);
       const proc = ctx.createScriptProcessor(2048, 1, 1);
@@ -284,13 +275,9 @@ class AudioEngine {
           this.rec.set(chunk, this.recWrite);
           this.recWrite += chunk.length;
         }
-        if (this.useFilament) {
-          for (let k = 0; k < chunk.length; k++) this.filBuf.push(chunk[k]!);
-          const now = ev.timeStamp || Date.now();
-          if (!this.filSending && this.filBuf.length >= SAMPLE_RATE / 2) {
-            void this.flushFilament(false);
-            this.filLastSend = now;
-          }
+        if (this.fil) {
+          this.fil.push(chunk);
+          void this.pumpFilament();
         } else {
           const used = Math.min(this.recWrite, MAX_SAMPLES);
           const pcm = this.rec.subarray(Math.max(0, used - SAMPLE_RATE * 4), used);
@@ -316,39 +303,52 @@ class AudioEngine {
     }
   }
 
-  private async flushFilament(end: boolean) {
-    if (this.filSending) return;
-    const take = this.filBuf;
-    if (take.length === 0 && !end) return;
-    this.filBuf = [];
-    this.filSending = true;
-    try {
-      const reply = await filamentLive(new Float32Array(take), {
-        reset: !this.filStarted,
-        end,
-      });
-      this.filStarted = true;
-      if (reply && reply.ok) {
-        const words = (reply.text || "").trim();
-        const partial = (reply.partial || "").trim();
-        if (reply.final && words) {
-          this.filText = this.filText ? this.filText + " " + words : words;
+  /**
+   * Send what the Filament stream has ready, one request at a time, until it
+   * has nothing more to send now. Returns the running pump if there is one.
+   */
+  private pumpFilament(): Promise<void> {
+    if (this.filPump) return this.filPump;
+    const fil = this.fil;
+    if (!fil) return Promise.resolve();
+    let req = fil.next();
+    if (!req) return Promise.resolve();
+    this.filPump = (async () => {
+      try {
+        while (req) {
+          const reply = await filamentLive(req.samples, { reset: req.reset, end: req.end });
+          fil.done(reply);
+          if (reply?.ok) {
+            this.snap = { ...this.snap, source: "mic", transcript: fil.text };
+            this.emit();
+          }
+          req = fil.next();
         }
-        const shown = partial ? (this.filText ? this.filText + " " + partial : partial) : this.filText;
-        this.snap = { ...this.snap, source: "mic", transcript: shown };
-        this.emit();
+      } finally {
+        this.filPump = null;
       }
-    } finally {
-      this.filSending = false;
-    }
+    })();
+    return this.filPump;
   }
 
   async stopMic() {
-    if (this.useFilament && this.filStarted) {
-      try { await this.flushFilament(true); } catch { /* door closed; keep what we have */ }
-    }
+    // Stop taking audio first, then send everything held with the end flag,
+    // after any request still in flight, so the last words are not dropped.
     this.recoding = false;
     this.listening = false;
+    const fil = this.fil;
+    if (fil) {
+      fil.finish();
+      try {
+        await this.pumpFilament();
+        // A pump that was mid-request when finish() came picks up the end
+        // request itself; one more pass covers a pump that had just stopped.
+        await this.pumpFilament();
+      } catch {
+        /* door closed; keep what we have */
+      }
+      if (this.fil === fil) this.fil = null;
+    }
     try {
       this.processor?.disconnect();
       this.mute?.disconnect();

@@ -7,8 +7,11 @@ Codec War exists to get away from Kaldi: the heavy, checkpoint-bound decoder
 speech recognition has leaned on for years. This repo is the working answer. It
 carries a **Zipformer-shaped acoustic encoder** — U-Net stacks, multi-band
 self-attention over 80-dimension fbank, depthwise temporal convolution, residual
-bypass — the modern architecture that replaced Kaldi, run live and local, not
-shipped as a 65-million-parameter file nobody can open.
+bypass — the modern architecture that replaced Kaldi, not shipped as a
+65-million-parameter file nobody can open. It is built (`zipformerStacks` in
+`encoder.ts`) but **not wired yet**: its weights are fixed and untrained, and
+nothing in the app runs it. The phones the app reads today come from a
+classifier against the Booth's own phones.
 
 ## One canal
 
@@ -28,8 +31,10 @@ audio also enter here.
 ### 2 · Codec — the middle
 Two things share the name, and both are real.
 
-- **Acoustic codec:** the Zipformer-shaped encoder above, turning sound into the
-  representation everything downstream reads.
+- **Acoustic codec:** `encode` in `encoder.ts`. Each 10 ms frame is compared
+  with the Booth's own 40 phones; the best phone per frame is the phone path the
+  in-tab recognizer reads. The Zipformer-shaped stack above sits beside it, not
+  wired.
 - **Text codec:** a full streaming encoder/decoder with an **encoder face** and a
   **decoder face**, built on the DBCS write/end architecture with lead/trail
   surrogate handling and state carried across chunks. Nine encodings:

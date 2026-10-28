@@ -1,4 +1,4 @@
-/** Kaldi-standard 16 kHz front-end: 25 ms Hamming, 10 ms hop, 80-dim fbank. */
+/** 16 kHz speech front end: 25 ms Hamming, 10 ms hop, 80-dim fbank. */
 
 export const SAMPLE_RATE = 16_000;
 export const HOP = 160;

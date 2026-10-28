@@ -1,10 +1,9 @@
 import { extractFrames, resampleLinear, rms, SAMPLE_RATE, type Frame } from "./dsp.ts";
-import { cosine, encode, mfccMatrix, type EncoderResult } from "./encoder.ts";
+import { encode, type EncoderResult } from "./encoder.ts";
 import { recognizeFrames, type AlignedWord } from "./recognize.ts";
 import { filamentHealth, filamentLive } from "./filament.ts";
 import { DEMO_LINE, synthesize } from "./synth.ts";
 
-export type Enrolled = { id: string; name: string; emb: number[] };
 
 export type EngineSnapshot = {
   pcm: Float32Array;
@@ -363,24 +362,6 @@ class AudioEngine {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
   }
-
-  matchSpeaker(enrolled: Enrolled[]) {
-    const emb = this.snap.result?.embedding;
-    if (!emb || !enrolled.length) return null;
-    let best: { name: string; score: number } | null = null;
-    for (const e of enrolled) {
-      const score = cosine(emb, Float32Array.from(e.emb));
-      if (!best || score > best.score) best = { name: e.name, score };
-    }
-    return best;
-  }
 }
 
 export const engine = new AudioEngine();
-
-export function speakerVector() {
-  const emb = engine.snap.result?.embedding;
-  return emb ? Array.from(emb) : null;
-}
-
-export { mfccMatrix, cosine };

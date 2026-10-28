@@ -1,13 +1,19 @@
 /**
- * Zipformer-shaped acoustic encoder.
+ * Acoustic encoder: frames in, phone posteriors out.
  *
- * Not a 65M-param checkpoint — those don't fit in a browser tab. This is the
- * architecture Kaldi was retired for: U-Net stacks, multi-band self-attention
- * over 80-dim fbank, depthwise temporal conv, residual bypass. Attention is
- * acoustic (cosine in mel bands + locality), so similar phones actually bind.
+ * What runs (encode): every 10 ms frame is compared with 40 phone prototypes,
+ * each the mean of the Booth's own synthesis of that one phone. The distances
+ * become posteriors, smoothed over 7 frames, and the per-frame best phone is
+ * the phone path the in-tab recognizer and the Filament room read.
+ *
+ * NOT WIRED: zipformerStacks, below, is a Zipformer-shaped stack (U-Net
+ * stacks, multi-band attention over the 80-band fbank, temporal convolution,
+ * residual bypass) with fixed weights and no training. Nothing in the app
+ * runs it, and no phone, time or word comes from it. It is kept, and tested,
+ * until it is trained and wired in.
  */
 
-import { cmvn, deltas, extractFrames, N_MELS, N_MFCC, type Frame } from "./dsp.ts";
+import { cmvn, deltas, extractFrames, FRAME_SEC, N_MELS, N_MFCC, type Frame } from "./dsp.ts";
 import {
   collapseCtc,
   N_PHONES,
@@ -18,13 +24,16 @@ import {
 import { synthesizePhone } from "./synth.ts";
 
 export const ENC_DIM = 64;
+/** Input frames run at 100 Hz (one per 10 ms); a stack at rate r runs at 100 / r Hz. */
+const FRAME_HZ = Math.round(1 / FRAME_SEC);
+const stack = (name: string, rate: 1 | 2 | 4) => ({ name: `${name} · ${FRAME_HZ / rate} Hz`, rate });
 export const STACKS = [
-  { name: "conv-embed", rate: 1 },
-  { name: "stack-1 · 50 Hz", rate: 1 },
-  { name: "stack-2 · 25 Hz", rate: 2 },
-  { name: "stack-3 · 12 Hz", rate: 4 },
-  { name: "stack-4 · 25 Hz", rate: 2 },
-  { name: "out-proj", rate: 1 },
+  stack("conv-embed", 1),
+  stack("stack-1", 1),
+  stack("stack-2", 2),
+  stack("stack-3", 4),
+  stack("stack-4", 2),
+  stack("out-proj", 1),
 ] as const;
 
 const BANDS = [
@@ -164,17 +173,28 @@ function attend(
 
 export type StackAct = { name: string; frames: Float32Array[] };
 
+/** What encode returns: the phone classifier's output and nothing else. */
 export type EncoderResult = {
+  /** Phone posteriors per frame, smoothed over 7 frames. */
+  posteriors: Float32Array[];
+  /** Phone posteriors per frame, before smoothing. */
+  framePosteriors: Float32Array[];
+  /** Best phone per frame from the smoothed posteriors (an argmax, not CTC). */
+  phonePath: number[];
+  /** Best phone per frame before smoothing. */
+  framePath: number[];
+  /** phonePath with repeats and silence collapsed, as glyphs. */
+  phones: string[];
+  /** framePath collapsed the same way. */
+  framePhones: string[];
+};
+
+/** The Zipformer-shaped stack's output. Not wired: see the file header. */
+export type StackResult = {
   stacks: StackAct[];
   out: Float32Array[];
   attn: Float32Array;
   attnN: number;
-  posteriors: Float32Array[];
-  kaldiPost: Float32Array[];
-  ctcPath: number[];
-  kaldiPath: number[];
-  phones: string[];
-  kaldiPhones: string[];
   embedding: Float32Array;
 };
 
@@ -257,13 +277,16 @@ function softmaxNegDist(dists: Float32Array, temp = 0.28) {
   return out;
 }
 
-function classifyFrames(frames: Frame[], smooth: number): Float32Array[] {
+function classifyFrames(frames: Frame[]): Float32Array[] {
   buildProtos();
-  const raw = frames.map((f) => {
+  return frames.map((f) => {
     const d = new Float32Array(N_PHONES);
     for (let i = 0; i < N_PHONES; i++) d[i] = protoDistance(f, i);
     return softmaxNegDist(d);
   });
+}
+
+function smoothPosteriors(raw: Float32Array[], smooth: number): Float32Array[] {
   if (smooth <= 0) return raw;
   const T = raw.length;
   const out: Float32Array[] = new Array(T);
@@ -329,22 +352,40 @@ function statsPool(seq: Float32Array[]) {
   return emb;
 }
 
+/** Phone posteriors and paths for a run of frames. This is what the app reads. */
 export function encode(frames: Frame[]): EncoderResult {
   if (frames.length < 4) {
-    const empty = new Float32Array(0);
     return {
-      stacks: [],
-      out: [],
-      attn: empty,
-      attnN: 0,
       posteriors: [],
-      kaldiPost: [],
-      ctcPath: [],
-      kaldiPath: [],
+      framePosteriors: [],
+      phonePath: [],
+      framePath: [],
       phones: [],
-      kaldiPhones: [],
-      embedding: new Float32Array(ENC_DIM * 2),
+      framePhones: [],
     };
+  }
+  const framePosteriors = classifyFrames(frames);
+  const posteriors = smoothPosteriors(framePosteriors, 3);
+  const phonePath = argmaxPath(posteriors);
+  const framePath = argmaxPath(framePosteriors);
+  return {
+    posteriors,
+    framePosteriors,
+    phonePath,
+    framePath,
+    phones: idsToGlyphs(phonePath),
+    framePhones: idsToGlyphs(framePath),
+  };
+}
+
+/**
+ * NOT WIRED. The Zipformer-shaped stack: fixed weights, no training. Nothing
+ * in the app calls this and nothing reads its output; phones come from
+ * encode. Its attention is O(T squared) in time and memory.
+ */
+export function zipformerStacks(frames: Frame[]): StackResult {
+  if (frames.length < 4) {
+    return { stacks: [], out: [], attn: new Float32Array(0), attnN: 0, embedding: new Float32Array(ENC_DIM * 2) };
   }
 
   const mels = cmvn(frames.map((f) => f.mel));
@@ -366,18 +407,13 @@ export function encode(frames: Frame[]): EncoderResult {
 
   const embed = mels.map((m, i) => projectMel(m, extraOf(i)));
   const s1 = convTemporal(embed);
-  const { out: s1a, attn, } = attend(s1, mels);
+  const { out: s1a, attn } = attend(s1, mels);
   const s2in = pool2(s1a);
   const s2 = convTemporal(s2in, [0.15, 0.7, 0.15]);
   const s3in = pool2(s2);
   const s3 = convTemporal(s3in, [0.2, 0.6, 0.2]);
   const s4 = mix(s2, upsample2(s3, s2.length), 0.6, 0.4);
   const out = mix(s1a, upsample2(s4, s1a.length), 0.7, 0.3);
-
-  const kaldiPost = classifyFrames(frames, 0);
-  const posteriors = classifyFrames(frames, 3);
-  const ctcPath = argmaxPath(posteriors);
-  const kaldiPath = argmaxPath(kaldiPost);
 
   return {
     stacks: [
@@ -391,35 +427,8 @@ export function encode(frames: Frame[]): EncoderResult {
     out,
     attn,
     attnN: s1a.length,
-    posteriors,
-    kaldiPost,
-    ctcPath,
-    kaldiPath,
-    phones: idsToGlyphs(ctcPath),
-    kaldiPhones: idsToGlyphs(kaldiPath),
     embedding: statsPool(out),
   };
-}
-
-export function cosine(a: Float32Array, b: Float32Array) {
-  const n = Math.min(a.length, b.length);
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < n; i++) {
-    dot += a[i]! * b[i]!;
-    na += a[i]! * a[i]!;
-    nb += b[i]! * b[i]!;
-  }
-  return dot / (Math.sqrt(na * nb) + 1e-8);
-}
-
-export function mfccMatrix(frames: Frame[]) {
-  return frames.map((f) => {
-    const row = new Float32Array(N_MFCC);
-    row.set(f.mfcc);
-    return row;
-  });
 }
 
 export { PHONE_INDEX };

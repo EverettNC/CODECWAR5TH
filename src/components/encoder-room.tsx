@@ -10,6 +10,7 @@ import {
   hexDump,
   inspectText,
   parseHex,
+  roundTripVerdict,
   StreamDecoder,
   type EncodingId,
 } from "@/lib/encoder/stream";
@@ -68,7 +69,8 @@ export function EncoderRoom() {
     const result = encodeText(text, encoding);
     const units = inspectText(text, encoding);
     const decoded = decodeBytes(result.bytes, encoding);
-    return { ...result, units, decoded };
+    const verdict = roundTripVerdict(text, result.state.replacements, decoded);
+    return { ...result, units, decoded, verdict };
   }, [text, encoding]);
 
   const fromHex = useMemo(() => {
@@ -369,7 +371,7 @@ export function EncoderRoom() {
         <p className="mt-3 text-sm text-muted">
           {face === "encoder" ? (
             <>
-              Round-trip {encoded.decoded.replacements ? "with replacements" : "clean"}:{" "}
+              Round-trip {encoded.verdict}:{" "}
               <span className="text-fg">{encoded.decoded.text || "—"}</span>
             </>
           ) : (

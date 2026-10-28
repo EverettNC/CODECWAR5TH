@@ -212,33 +212,96 @@ function zeroCrossing(buf: Float32Array, off: number) {
   return z / WIN;
 }
 
-/** YIN-lite pitch in Hz. 0 if unvoiced. */
+/** Lowest pitch read: 60 Hz, below the lowest speaking voices. */
+export const YIN_F0_MIN = 60;
+/** Highest pitch read: 500 Hz, above a child's raised voice. */
+export const YIN_F0_MAX = 500;
+/** A frame is voiced when its normalized difference dips below this. 0.22 is the value this reader has always used. */
+export const YIN_VOICED = 0.22;
+/**
+ * The first dip below this is the period. 0.15: across ten Booth vowels and
+ * nasals from 60 to 400 Hz it read 99.5% of voiced frames within 5%; 0.1
+ * read 98.4% and 0.05 read 94.5%, because a shallower first dip is missed
+ * and the deepest dip, often two periods, is taken instead.
+ */
+export const YIN_FIRST_DIP = 0.15;
+/**
+ * How much shallower a dip at a half or a third of the chosen lag may be and
+ * still be taken as the period. 0.2: on the same vowels it lifted frames read
+ * within a third of an octave from 99.1% to 99.4%; 0.05 gave 99.2%.
+ */
+export const YIN_SUBMULTIPLE = 0.2;
+
+/**
+ * YIN pitch in Hz (de Cheveigné and Kawahara 2002), 0 if unvoiced.
+ *
+ * The difference function is summed over one fixed stretch for every lag and
+ * normalized by its running mean from lag 1. The period is the FIRST dip below
+ * YIN_FIRST_DIP, followed down to its own minimum; when no dip is that deep,
+ * the deepest dip, and the frame is voiced only when that is below YIN_VOICED.
+ * The old reader always took the deepest dip and started its running mean at
+ * the shortest lag, which read two or three periods as one: 300 Hz came out
+ * as 100 Hz and 240 Hz as 80 Hz.
+ */
 export function pitchYin(buf: Float32Array, off: number, n = WIN): { f0: number; cm: number } {
-  const tauMax = Math.min(200, Math.floor(n / 2));
-  const tauMin = 32;
-  const d = new Float32Array(tauMax + 1);
-  for (let tau = tauMin; tau <= tauMax; tau++) {
+  const tauMin = Math.floor(SAMPLE_RATE / YIN_F0_MAX);
+  const tauMax = Math.min(Math.ceil(SAMPLE_RATE / YIN_F0_MIN), n - tauMin);
+  const w = n - tauMax;
+  if (w <= 0 || tauMax <= tauMin) return { f0: 0, cm: 1 };
+  const cmnd = new Float32Array(tauMax + 1);
+  cmnd[0] = 1;
+  let run = 0;
+  for (let tau = 1; tau <= tauMax; tau++) {
     let s = 0;
-    const lim = n - tau;
-    for (let j = 0; j < lim; j++) {
+    for (let j = 0; j < w; j++) {
       const diff = buf[off + j]! - buf[off + j + tau]!;
       s += diff * diff;
     }
-    d[tau] = s;
+    run += s;
+    cmnd[tau] = run > 0 ? (s * tau) / run : 1;
   }
-  let run = 0;
-  let bestTau = 0;
-  let bestCm = 1;
-  for (let tau = tauMin; tau <= tauMax; tau++) {
-    run += d[tau]!;
-    const cm = d[tau]! * (tau - tauMin + 1) / (run + 1e-12);
-    if (cm < bestCm) {
-      bestCm = cm;
-      bestTau = tau;
+  let tau = tauMin;
+  while (tau <= tauMax && cmnd[tau]! >= YIN_FIRST_DIP) tau++;
+  if (tau <= tauMax) {
+    // The dip is the whole run below YIN_VOICED from there; small ripples inside it are not the period.
+    let t = tau;
+    while (t < tauMax && cmnd[t + 1]! < YIN_VOICED) {
+      t++;
+      if (cmnd[t]! < cmnd[tau]!) tau = t;
+    }
+  } else {
+    tau = tauMin;
+    for (let t = tauMin + 1; t <= tauMax; t++) if (cmnd[t]! < cmnd[tau]!) tau = t;
+  }
+  if (cmnd[tau]! >= YIN_VOICED) return { f0: 0, cm: cmnd[tau]! };
+  // A dip at a third or a half of the lag, voiced and within YIN_SUBMULTIPLE of
+  // this one, is the true period and this lag is three or two of them.
+  for (const k of [3, 2]) {
+    const c = tau / k;
+    if (c * 0.94 < tauMin) continue;
+    let bt = 0;
+    let bv = Infinity;
+    for (let t = Math.floor(c * 0.94); t <= Math.ceil(c * 1.06); t++) {
+      if (cmnd[t]! < bv) {
+        bv = cmnd[t]!;
+        bt = t;
+      }
+    }
+    if (bv < YIN_VOICED && bv < cmnd[tau]! + YIN_SUBMULTIPLE) {
+      tau = bt;
+      break;
     }
   }
-  if (bestCm > 0.22 || bestTau === 0) return { f0: 0, cm: bestCm };
-  return { f0: SAMPLE_RATE / bestTau, cm: bestCm };
+  const b = cmnd[tau]!;
+  let shift = 0;
+  if (tau > tauMin && tau < tauMax) {
+    // Parabolic refinement of the dip between its neighbours.
+    const a = cmnd[tau - 1]!;
+    const c = cmnd[tau + 1]!;
+    const den = a - 2 * b + c;
+    if (den > 0) shift = Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den));
+  }
+  return { f0: SAMPLE_RATE / (tau + shift), cm: b };
 }
 
 /** Two-formant estimate from spectral peaks in the voiced band. */

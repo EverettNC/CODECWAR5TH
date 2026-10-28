@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Waveform } from "@/components/waveform";
 import { engine } from "@/lib/audio/codec-engine";
 import { useStudio } from "@/lib/store";
-import { cn } from "@/lib/utils";
 
 export function BoothRoom() {
   const text = useStudio((s) => s.boothText);
@@ -13,8 +12,6 @@ export function BoothRoom() {
   const f0 = useStudio((s) => s.boothF0);
   const rate = useStudio((s) => s.boothRate);
   const setVoice = useStudio((s) => s.setBoothVoice);
-  const host = useStudio((s) => s.useHostVoice);
-  const setHost = useStudio((s) => s.setUseHostVoice);
   const encoderText = useStudio((s) => s.encoderText);
   const [, setTick] = useState(0);
 
@@ -25,20 +22,11 @@ export function BoothRoom() {
   const speak = async () => {
     const line = text.trim();
     if (!line) return;
-    if (host && typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(line);
-      u.rate = rate;
-      u.pitch = Math.min(2, Math.max(0.5, f0 / 148));
-      window.speechSynthesis.speak(u);
-      return;
-    }
     await engine.speakBooth(line, { f0, rate });
   };
 
   const stop = () => {
     engine.stopPlayback();
-    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
   };
 
   return (
@@ -71,36 +59,6 @@ export function BoothRoom() {
       </Panel>
 
       <Panel kicker="voice" title="Source" className="lg:col-span-5">
-        <div
-          role="radiogroup"
-          aria-label="Voice source"
-          className="flex gap-1 rounded-md bg-elevated p-1"
-        >
-          <button
-            type="button"
-            role="radio"
-            aria-checked={!host}
-            className={cn(
-              "h-11 flex-1 rounded-sm text-sm transition-colors duration-[var(--motion-quick)]",
-              !host ? "bg-linen text-bg" : "text-muted hover:text-fg",
-            )}
-            onClick={() => setHost(false)}
-          >
-            Booth engine
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={host}
-            className={cn(
-              "h-11 flex-1 rounded-sm text-sm transition-colors duration-[var(--motion-quick)]",
-              host ? "bg-linen text-bg" : "text-muted hover:text-fg",
-            )}
-            onClick={() => setHost(true)}
-          >
-            Host voice
-          </button>
-        </div>
         <label className="mt-5 block" htmlFor="booth-pitch">
           <span className="font-mono text-xs tracking-widest text-subtle uppercase">
             Pitch {f0} Hz
@@ -130,7 +88,7 @@ export function BoothRoom() {
           />
         </label>
         <div className="mt-5 grid grid-cols-2 gap-4">
-          <Stat label="engine" value={host ? "host" : "formant"} />
+          <Stat label="engine" value="formant" />
           <Stat label="source" value={engine.snap.source} />
         </div>
       </Panel>
@@ -141,8 +99,8 @@ export function BoothRoom() {
         </div>
         <p className="mt-3 text-sm text-muted">
           Booth is the mouth — the out. Codec sits in the middle and hands it a
-          string. Host voice uses the system synthesizer when you want a familiar
-          speaker.
+          string. Every sound here is made on this machine by the Booth; text is
+          never handed to the browser's or the system's speech engine.
         </p>
       </Panel>
     </div>

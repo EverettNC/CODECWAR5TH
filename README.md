@@ -36,8 +36,11 @@ Two things share the name, and both are real.
   **UTF-8** (1–4 bytes), **UTF-16LE** and **UTF-16BE** (surrogate pairs, both
   endiannesses), **UTF-32LE** and **UTF-32BE** (one code point, four bytes),
   **ASCII**, **Latin-1**, **Windows-1252** (with the full CP1252 0x80–0x9F
-  override table), and **GB18030** (4-byte Unicode, pending bytes carried across
-  chunks). Every character is dissected into a unit card: code point, glyph,
+  override table), and **GB18030** (one, two or four bytes from the codec's own
+  table in `gb18030-table.ts`, written by `scripts/gen-gb18030-table.mjs` from
+  the platform's own decoder, offline; pending bytes carried across chunks; the
+  round trip reads "clean" only when the text comes back exactly as it went
+  in). Every character is dissected into a unit card: code point, glyph,
   UTF-16 code units, the raw bytes in the chosen encoding, and — for astral code
   points above U+FFFF — the surrogate pair spelled out (lead 0xD800-range,
   trail 0xDC00-range). Replacement on what cannot map; nothing invented.

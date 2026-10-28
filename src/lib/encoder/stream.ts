@@ -4,6 +4,15 @@
  * replacement on UNASSIGNED. No Node Buffer — Uint8Array.
  */
 
+import {
+  RANGES_CP,
+  RANGES_POINTER,
+  SPECIAL_CP,
+  SPECIAL_POINTER,
+  TWO_BYTE_COUNT,
+  TWO_BYTE_RUNS,
+} from "./gb18030-table.ts";
+
 export const UNASSIGNED = -1;
 const LEAD_MIN = 0xd800;
 const LEAD_MAX = 0xdbff;
@@ -30,7 +39,7 @@ export const ENCODINGS: { id: EncodingId; label: string; note: string }[] = [
   { id: "ascii", label: "ASCII", note: "7-bit, replacement on high bytes" },
   { id: "latin1", label: "Latin-1", note: "ISO-8859-1, byte = code point" },
   { id: "windows-1252", label: "Windows-1252", note: "Latin-1 with 0x80–0x9F" },
-  { id: "gb18030", label: "GB18030", note: "4-byte Unicode mapping" },
+  { id: "gb18030", label: "GB18030", note: "Chinese, 1, 2 or 4 bytes" },
 ];
 
 const ENCODING_IDS = new Set<string>(ENCODINGS.map((e) => e.id));
@@ -121,10 +130,7 @@ function encodeUtf8(cp: number, out: number[]) {
   }
 }
 
-/** Range starts: Unicode, matching 4-byte pointer. Binary search like the codec. */
-const GB_U = [0x80, 0x10000];
-const GB_P = [0x0000, 0x2e248];
-
+/** Last index whose value is <= val in an ascending table, or -1. */
 function findIdx(table: number[], val: number) {
   if (!table.length || table[0]! > val) return -1;
   let l = 0;
@@ -137,31 +143,85 @@ function findIdx(table: number[], val: number) {
   return l;
 }
 
-function gb18030Bytes(cp: number, out: number[]) {
+/**
+ * GB18030 carries its own table (gb18030-table.ts), so the encoder and the
+ * decoder read the same mapping on every machine. Most BMP text is two bytes
+ * from the index; the rest of the BMP is four bytes through the ranges; the
+ * astral planes are four bytes, linear from pointer 189000.
+ */
+const GB_FOUR_BMP_LAST = 39419;
+const GB_ASTRAL_FIRST = 189000;
+const GB_ASTRAL_LAST = 1237575;
+
+let gbTwo: Uint32Array | null = null; // pointer -> code point
+let gbTwoBack: Map<number, number> | null = null; // code point -> first pointer
+
+function gbTables() {
+  if (gbTwo && gbTwoBack) return { two: gbTwo, back: gbTwoBack };
+  const two = new Uint32Array(TWO_BYTE_COUNT);
+  const back = new Map<number, number>();
+  let p = 0;
+  let next = 0;
+  for (const run of TWO_BYTE_RUNS.split(",")) {
+    const [jump, len] = run.split(":");
+    let cp = next + parseInt(jump!, 36);
+    const n = len ? parseInt(len, 36) : 1;
+    for (let k = 0; k < n; k++, p++, cp++) {
+      two[p] = cp;
+      if (!back.has(cp)) back.set(cp, p);
+    }
+    next = cp;
+  }
+  if (p !== TWO_BYTE_COUNT) throw new Error(`gb18030 two-byte table has ${p} entries`);
+  gbTwo = two;
+  gbTwoBack = back;
+  return { two, back };
+}
+
+/** Four-byte pointer -> code point, or -1 when the pointer maps to nothing. */
+function gbRangesCp(ptr: number): number {
+  if (ptr > GB_FOUR_BMP_LAST && ptr < GB_ASTRAL_FIRST) return -1;
+  if (ptr > GB_ASTRAL_LAST) return -1;
+  if (ptr >= GB_ASTRAL_FIRST) return 0x10000 + ptr - GB_ASTRAL_FIRST;
+  if (ptr === SPECIAL_POINTER) return SPECIAL_CP;
+  const idx = findIdx(RANGES_POINTER, ptr);
+  return RANGES_CP[idx]! + ptr - RANGES_POINTER[idx]!;
+}
+
+/** Code point -> four-byte pointer, or -1 when no four-byte form reads back as it. */
+function gbRangesPointer(cp: number): number {
+  if (cp >= 0x10000) return GB_ASTRAL_FIRST + cp - 0x10000;
+  if (cp === SPECIAL_CP) return SPECIAL_POINTER;
+  const idx = findIdx(RANGES_CP, cp);
+  if (idx < 0) return -1;
+  const ptr = RANGES_POINTER[idx]! + cp - RANGES_CP[idx]!;
+  const end = idx + 1 < RANGES_POINTER.length ? RANGES_POINTER[idx + 1]! : GB_FOUR_BMP_LAST + 1;
+  if (ptr >= end || ptr === SPECIAL_POINTER) return -1;
+  return ptr;
+}
+
+function gb18030Bytes(cp: number, out: number[]): boolean {
   if (cp < 0x80) {
     pushByte(out, cp);
-    return;
+    return true;
   }
-  const idx = findIdx(GB_U, cp);
-  if (idx < 0) {
-    pushByte(out, DEF_BYTE);
-    return;
+  if (cp > 0x10ffff) return false;
+  const two = gbTables().back.get(cp);
+  if (two !== undefined) {
+    const t = two % 190;
+    pushByte(out, 0x81 + Math.floor(two / 190));
+    pushByte(out, t < 0x3f ? t + 0x40 : t + 0x41);
+    return true;
   }
-  let n = GB_P[idx]! + (cp - GB_U[idx]!);
-  const b1 = 0x81 + Math.floor(n / 12600);
+  let n = gbRangesPointer(cp);
+  if (n < 0) return false;
+  pushByte(out, 0x81 + Math.floor(n / 12600));
   n %= 12600;
-  const b2 = 0x30 + Math.floor(n / 1260);
+  pushByte(out, 0x30 + Math.floor(n / 1260));
   n %= 1260;
-  const b3 = 0x81 + Math.floor(n / 10);
-  const b4 = 0x30 + (n % 10);
-  if (b1 > 0xfe || b3 > 0xfe || b2 > 0x39 || b4 > 0x39) {
-    pushByte(out, DEF_BYTE);
-    return;
-  }
-  pushByte(out, b1);
-  pushByte(out, b2);
-  pushByte(out, b3);
-  pushByte(out, b4);
+  pushByte(out, 0x81 + Math.floor(n / 10));
+  pushByte(out, 0x30 + (n % 10));
+  return true;
 }
 
 function encodeCodePoint(cp: number, enc: EncodingId, out: number[]): boolean {
@@ -202,8 +262,7 @@ function encodeCodePoint(cp: number, enc: EncodingId, out: number[]): boolean {
       return true;
     }
     case "gb18030":
-      gb18030Bytes(cp, out);
-      return true;
+      return gb18030Bytes(cp, out);
   }
 }
 
@@ -311,20 +370,6 @@ function concatPending(pending: number[], buf: Uint8Array): Uint8Array {
   return data;
 }
 
-function tryGb18030(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("gb18030", { fatal: false }).decode(bytes);
-  } catch {
-    return null;
-  }
-}
-
-function gb18030PointerToCp(ptr: number): number {
-  const idx = findIdx(GB_P, ptr);
-  if (idx < 0) return REPLACEMENT;
-  return GB_U[idx]! + ptr - GB_P[idx]!;
-}
-
 export class StreamDecoder {
   pendingBytes: number[] = [];
   leadSurrogate = -1;
@@ -357,15 +402,6 @@ export class StreamDecoder {
 
   end(): string {
     const cps: number[] = [];
-    if (this.encoding === "gb18030" && this.pendingBytes.length) {
-      const rest = Uint8Array.from(this.pendingBytes);
-      const via = tryGb18030(rest);
-      if (via !== null) {
-        this.pendingBytes = [];
-        this.units += via.length;
-        return via;
-      }
-    }
     if (this.leadSurrogate !== -1) {
       cps.push(REPLACEMENT);
       this.replacements++;
@@ -516,7 +552,13 @@ export class StreamDecoder {
     }
   }
 
+  /**
+   * GB18030 from the codec's own table, the decoder of the Encoding Standard:
+   * a bad second byte that is ASCII is read again as ASCII; a bad third or
+   * fourth byte gives one replacement and reading resumes at the second byte.
+   */
   private decodeGb18030(data: Uint8Array, cps: number[]) {
+    const { two } = gbTables();
     let i = 0;
     while (i < data.length) {
       const b = data[i]!;
@@ -525,49 +567,56 @@ export class StreamDecoder {
         i += 1;
         continue;
       }
+      if (b === 0x80) {
+        cps.push(0x20ac);
+        i += 1;
+        continue;
+      }
+      if (b === 0xff) {
+        this.replace(cps);
+        i += 1;
+        continue;
+      }
       if (i + 1 >= data.length) {
         this.pendingBytes = Array.from(data.subarray(i));
         break;
       }
       const b2 = data[i + 1]!;
-      if (b >= 0x81 && b <= 0xfe && b2 >= 0x30 && b2 <= 0x39) {
-        if (i + 3 >= data.length) {
+      if (b2 >= 0x30 && b2 <= 0x39) {
+        if (i + 2 >= data.length) {
           this.pendingBytes = Array.from(data.subarray(i));
           break;
         }
         const b3 = data[i + 2]!;
-        const b4 = data[i + 3]!;
-        const slice = data.subarray(i, i + 4);
-        const via = tryGb18030(slice);
-        if (via !== null && via !== "\uFFFD") {
-          for (const ch of via) cps.push(ch.codePointAt(0) ?? REPLACEMENT);
-        } else if (b3 >= 0x81 && b3 <= 0xfe && b4 >= 0x30 && b4 <= 0x39) {
-          const ptr =
-            (b - 0x81) * 12600 + (b2 - 0x30) * 1260 + (b3 - 0x81) * 10 + (b4 - 0x30);
-          const cp = gb18030PointerToCp(ptr);
-          if (cp === REPLACEMENT) this.replace(cps);
-          else cps.push(cp);
-        } else {
+        if (b3 < 0x81 || b3 > 0xfe) {
           this.replace(cps);
           i += 1;
           continue;
         }
+        if (i + 3 >= data.length) {
+          this.pendingBytes = Array.from(data.subarray(i));
+          break;
+        }
+        const b4 = data[i + 3]!;
+        if (b4 < 0x30 || b4 > 0x39) {
+          this.replace(cps);
+          i += 1;
+          continue;
+        }
+        const ptr = (b - 0x81) * 12600 + (b2 - 0x30) * 1260 + (b3 - 0x81) * 10 + (b4 - 0x30);
+        const cp = gbRangesCp(ptr);
+        if (cp < 0) this.replace(cps);
+        else cps.push(cp);
         i += 4;
         continue;
       }
-      if (b >= 0x81 && b <= 0xfe && ((b2 >= 0x40 && b2 <= 0x7e) || (b2 >= 0x80 && b2 <= 0xfe))) {
-        const slice = data.subarray(i, i + 2);
-        const via = tryGb18030(slice);
-        if (via !== null) {
-          for (const ch of via) cps.push(ch.codePointAt(0) ?? REPLACEMENT);
-        } else {
-          this.replace(cps);
-        }
+      if ((b2 >= 0x40 && b2 <= 0x7e) || (b2 >= 0x80 && b2 <= 0xfe)) {
+        cps.push(two[(b - 0x81) * 190 + (b2 < 0x7f ? b2 - 0x40 : b2 - 0x41)]!);
         i += 2;
         continue;
       }
       this.replace(cps);
-      i += 1;
+      i += b2 < 0x80 ? 1 : 2;
     }
   }
 }
@@ -622,7 +671,11 @@ export function inspectText(str: string, encoding: EncodingId): CodeUnit[] {
       units.push(0xd800 | (u >> 10), 0xdc00 | (u & 0x3ff));
     } else units.push(cp);
     const buf: number[] = [];
-    encodeCodePoint(cp, encoding, buf);
+    const lone = cp >= LEAD_MIN && cp <= TRAIL_MAX;
+    if (lone || !encodeCodePoint(cp, encoding, buf)) {
+      buf.length = 0;
+      buf.push(DEF_BYTE);
+    }
     out.push({
       cp,
       glyph: ch,
@@ -632,4 +685,19 @@ export function inspectText(str: string, encoding: EncodingId): CodeUnit[] {
     });
   }
   return out;
+}
+
+export type RoundTripVerdict = "clean" | "with replacements" | "changed";
+
+/**
+ * Clean only when nothing was replaced on either side and the text read back
+ * is the text that went in. A wrong character with no replacement is "changed".
+ */
+export function roundTripVerdict(
+  original: string,
+  encodeReplacements: number,
+  decoded: { text: string; replacements: number },
+): RoundTripVerdict {
+  if (encodeReplacements > 0 || decoded.replacements > 0) return "with replacements";
+  return decoded.text === original ? "clean" : "changed";
 }

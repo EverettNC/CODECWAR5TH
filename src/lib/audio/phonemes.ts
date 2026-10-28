@@ -64,7 +64,6 @@ export const LEXICON: Record<string, string[]> = {
   the: ["DH", "AH"],
   encoder: ["EH", "N", "K", "OW", "D", "ER"],
   replaced: ["R", "IH", "P", "L", "EY", "S", "T"],
-  kaldi: ["K", "AE", "L", "D", "IY"],
   filament: ["F", "IH", "L", "AH", "M", "AH", "N", "T"],
   booth: ["B", "UW", "TH"],
   a: ["AH"],

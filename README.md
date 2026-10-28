@@ -23,7 +23,7 @@ Keys: `1` Filament · `2` Codec · `3` Booth · `4` Frames · `5` Dispersion · 
 
 ### 1 · Filament — the ear
 Live voice enters here. The real, sovereign **Vosk Filament** runs as its own
-process on `127.0.0.1:4850`; the mic streams to it and the words come back. If
+process on `127.0.0.1:4850`; the mic streams to it and the words come back.
 The mic is taken raw (the browser's echo cancellation, noise suppression and
 auto gain off), and when listening stops everything still held goes to the door
 with the end flag, after any request in flight, so the last words are kept. If

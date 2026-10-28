@@ -190,7 +190,7 @@ function dtw(a: Float32Array[], b: Float32Array[]) {
 
 export function recognizeFrames(
   frames: Frame[],
-  result?: Pick<EncoderResult, "ctcPath" | "phones">,
+  result?: Pick<EncoderResult, "phonePath" | "phones">,
   hop = FRAME_SEC,
 ): Recognition {
   const phones = result?.phones ?? [];
@@ -238,15 +238,15 @@ export function recognizeFrames(
       phones,
     };
   }
-  if (result?.ctcPath.length) return decodePath(result.ctcPath, hop);
+  if (result?.phonePath.length) return decodePath(result.phonePath, hop);
   return { transcript: "", aligned: [], phones };
 }
 
 export function recognize(
-  result: Pick<EncoderResult, "ctcPath" | "phones">,
+  result: Pick<EncoderResult, "phonePath" | "phones">,
   hop = FRAME_SEC,
 ): Recognition {
-  return decodePath(result.ctcPath, hop);
+  return decodePath(result.phonePath, hop);
 }
 
 export function forceAlign(text: string, path: number[], hop = FRAME_SEC): AlignedWord[] {

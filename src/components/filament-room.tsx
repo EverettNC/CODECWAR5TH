@@ -153,8 +153,9 @@ export function FilamentRoom() {
         </p>
         <p className="mt-4 text-sm leading-relaxed text-muted">
           Unknown audio is decoded in this tab against the Klatt lexicon —
-          the same mouth as Booth. Times come from the encoder. Nothing
-          leaves the box.
+          the same mouth as Booth. Phones come from a classifier against the
+          Booth's own phones; word times come from matching word templates.
+          Nothing leaves the box.
         </p>
       </Panel>
 

@@ -16,7 +16,7 @@ The pipeline is one straight line, and the studio names it on screen:
 
 **Filament in. Codec. Booth out. — that is one canal.**
 
-Keys: `1` Filament · `2` Codec · `3` Booth · `4` Dispersion · `5` War.
+Keys: `1` Filament · `2` Codec · `3` Booth · `4` Frames · `5` Dispersion · `6` War.
 
 ### 1 · Filament — the ear
 Live voice enters here. The real, sovereign **Vosk Filament** runs as its own
@@ -46,7 +46,29 @@ Two things share the name, and both are real.
 The mouth. Klatt synthesis — the same templates the in-tab recognizer matches
 against — closing the loop from text back to sound.
 
-### 4 · Dispersion — many canals
+### 4 · Frames — a voice measured and rendered back
+Added 2026-10-28. A recording is measured every 5 ms (110 samples at 22050 Hz)
+into its pitch, its full spectral envelope (96 points, not a few formants) and
+its aperiodicity in 8 bands, so the breath, the S and the stop bursts are
+measured from the recording itself (`src/lib/audio/frames.ts`: YIN pitch with
+one Viterbi path, CheapTrick envelope, band autocorrelation at the period).
+`vocoder.ts` renders a voice back from those numbers alone: a minimum-phase
+pulse per glottal cycle plus filtered noise, with the voice's measured jitter
+and shimmer added cycle by cycle. The room plays the recording and its
+rendering side by side.
+
+The same modules are the Booth's frame mouth for new sentences:
+`align.ts` finds phone timings inside the words the Filament heard (forced
+alignment, Viterbi-trained per-phone models), `bank.ts` cuts a voice's
+recordings into phone units that know their neighbours, and `stitch.ts`
+chooses whole recorded words and runs of words where the recordings hold them,
+phone runs where they do not, smooths the joins, and applies the voice's
+measured profile and every named control (breath, jitter, shimmer, timbre,
+articulation, intonation, prosody, resonance, rate, pitch), listing each with
+its value, or refuses with the reason. Christman-Sound carries the runtime port
+(christman_vocoder.c and christman_sound/stitch.py), tested against these files.
+
+### 5 · Dispersion — many canals
 One canal is Filament → Codec → Booth. This room keeps many, because speakers do
 not join. Three views: **Field** (see them all), **Canals** (each one named),
 **Refused** (the law). Fed by a **Mic canal** or a **File canal**. Three built
@@ -55,7 +77,7 @@ Booth B), and **Crisis overlap** (three voices at once). Press **Discern canals*
 to pull them apart; show or hide the **refused ghost** — the overlap it will not
 merge. The counter reads canals, fused, and sealed mix analysis.
 
-### 5 · War — the mix is allowed
+### 6 · War — the mix is allowed
 The end of the line, and the room the whole thing is named for. Crisis overlap
 taken to its decision: **three mouths, one measurement.**
 

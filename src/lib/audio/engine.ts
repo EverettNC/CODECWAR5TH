@@ -8,6 +8,7 @@ import {
   type TapeFrame,
 } from "./corti.ts";
 import { extractFrame, extractFrames, resampleLinear, SAMPLE_RATE, type Frame } from "./dsp.ts";
+import { MicTape, RAW_MIC } from "./mic-tape.ts";
 import { hvacPcm, kettlePcm } from "./noise.ts";
 import { sceneById, type CanalSpec, type SceneId } from "./scenes.ts";
 import { synthesize } from "./synth.ts";
@@ -102,6 +103,36 @@ function canalFromPcm(
   };
 }
 
+/** Seconds of microphone audio a Mic canal keeps, the length of a scene. */
+const MIC_SECONDS = 6.4;
+/** How often the Mic canal's card and waveform are rebuilt from its tape. */
+const MIC_REFRESH_MS = 100;
+
+/** The Mic canal as it stands: the tape's audio, its frames, its newest frame live. */
+export function canalFromMicTape(
+  id: string,
+  tape: MicTape,
+  prev?: Pick<CanalState, "ink" | "muted" | "solo">,
+): CanalState {
+  const pcm = tape.pcm();
+  const frames = tape.frames();
+  return {
+    id,
+    name: "Mic",
+    kind: "mic",
+    line: null,
+    ink: prev?.ink ?? "linen",
+    pcm,
+    frames,
+    card: cardFromFrames(frames),
+    tape: tapeFromFrames(frames),
+    live: liveFromFrame(frames[frames.length - 1]),
+    muted: prev?.muted ?? false,
+    solo: prev?.solo ?? false,
+    duration: pcm.length / SAMPLE_RATE,
+  };
+}
+
 class DispersionEngine {
   snap: EngineSnap = emptySnap();
   filaments: Record<string, FilamentPoint[]> = {};
@@ -113,8 +144,13 @@ class DispersionEngine {
     gain: GainNode;
   }[] = [];
   private mic: {
+    id: string;
     stream: MediaStream;
     source: MediaStreamAudioSourceNode;
+    processor: ScriptProcessorNode;
+    mute: GainNode;
+    tape: MicTape;
+    shownAt: number;
   } | null = null;
   private fusedCache: { key: Float32Array[]; pcm: Float32Array; card: CortiCard } | null = null;
   private raf = 0;
@@ -212,7 +248,20 @@ class DispersionEngine {
     await this.play();
   }
 
+  /**
+   * A live microphone canal. The mic's own audio is recorded into a tape
+   * (mic-tape.ts) and the canal is rebuilt from it as it arrives: waveform,
+   * card, live frame and field trail are all the microphone's. Raw capture:
+   * the browser's echo cancellation, noise suppression and gain are off, so
+   * the voice is what gets measured. The canal is never played back through
+   * the speakers, which would feed the mic its own output.
+   */
   async addMic() {
+    if (this.mic) {
+      this.snap = { ...this.snap, lastError: "The mic is already a canal." };
+      this.emit();
+      return;
+    }
     if (this.snap.canals.length >= MAX_CANALS) {
       this.snap = { ...this.snap, lastError: "Four canals. That's the cap. Fusion is not the overflow." };
       this.emit();
@@ -220,24 +269,32 @@ class DispersionEngine {
     }
     try {
       const ctx = await this.ensureCtx();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: RAW_MIC });
       const source = ctx.createMediaStreamSource(stream);
-      const silent = ctx.createGain();
-      silent.gain.value = 0;
-      source.connect(silent);
-      silent.connect(ctx.destination);
-      this.mic = { stream, source };
+      const processor = ctx.createScriptProcessor(2048, 1, 1);
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      const tape = new MicTape(MIC_SECONDS);
       const id = `mic-${Date.now().toString(36)}`;
-      const canal = canalFromPcm(
-        { id, name: "Mic", kind: "mic", line: null, ink: "linen" },
-        new Float32Array(SAMPLE_RATE),
-      );
+      const n = this.snap.canals.length;
+      const ink: CanalInk = n === 0 ? "linen" : n === 1 ? "signal" : "warn";
+      const mic = { id, stream, source, processor, mute, tape, shownAt: 0 };
+      processor.onaudioprocess = (ev) => {
+        if (this.mic !== mic) return;
+        tape.push(ev.inputBuffer.getChannelData(0), ev.inputBuffer.sampleRate);
+        const now = performance.now();
+        if (now - mic.shownAt < MIC_REFRESH_MS) return;
+        mic.shownAt = now;
+        this.refreshMic();
+      };
+      source.connect(processor);
+      processor.connect(mute);
+      mute.connect(ctx.destination);
+      this.mic = mic;
       this.filaments[id] = [];
       this.snap = {
         ...this.snap,
-        canals: [...this.snap.canals, canal],
+        canals: [...this.snap.canals, canalFromMicTape(id, tape, { ink, muted: false, solo: false })],
         selected: id,
         lastError: null,
       };
@@ -249,6 +306,48 @@ class DispersionEngine {
       };
       this.emit();
     }
+  }
+
+  /** Rebuild the Mic canal from what the microphone has recorded so far. */
+  private refreshMic() {
+    const mic = this.mic;
+    if (!mic) return;
+    const idx = this.snap.canals.findIndex((c) => c.id === mic.id);
+    if (idx < 0) return;
+    const canal = canalFromMicTape(mic.id, mic.tape, this.snap.canals[idx]);
+    const canals = this.snap.canals.slice();
+    canals[idx] = canal;
+    this.snap = { ...this.snap, canals };
+    // While the house plays, the tick draws every trail; otherwise draw the mic's here.
+    if (!this.snap.playing && canal.frames.length) this.pushTrail(canal, canal.live);
+    this.emit();
+  }
+
+  /** True while a Mic canal is recording. */
+  get micOpen() {
+    return this.mic !== null;
+  }
+
+  /** Close the microphone; the Mic canal keeps what it recorded. */
+  stopMicCanal() {
+    this.refreshMic();
+    this.stopMic();
+    this.emit();
+  }
+
+  private stopMic() {
+    const mic = this.mic;
+    if (!mic) return;
+    this.mic = null;
+    mic.processor.onaudioprocess = null;
+    try {
+      mic.source.disconnect();
+      mic.processor.disconnect();
+      mic.mute.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    mic.stream.getTracks().forEach((t) => t.stop());
   }
 
   async addFile(file: File) {
@@ -294,6 +393,7 @@ class DispersionEngine {
   }
 
   removeCanal(id: string) {
+    if (this.mic?.id === id) this.stopMic();
     const canals = this.snap.canals.filter((c) => c.id !== id);
     delete this.filaments[id];
     this.snap = {
@@ -312,6 +412,7 @@ class DispersionEngine {
     this.startedAt = ctx.currentTime;
     this.nodes = [];
     for (const canal of this.snap.canals) {
+      // The Mic canal is live input; playing it would feed the mic its own output.
       if (canal.kind === "mic" || canal.pcm.length < 32) continue;
       const audioBuf = ctx.createBuffer(1, canal.pcm.length, SAMPLE_RATE);
       audioBuf.copyToChannel(new Float32Array(canal.pcm), 0);
@@ -373,8 +474,7 @@ class DispersionEngine {
   lastStop() {
     this.stop();
     this.stopNodes();
-    this.mic?.stream.getTracks().forEach((t) => t.stop());
-    this.mic = null;
+    this.stopMic();
   }
 
   private stopNodes() {
@@ -423,6 +523,15 @@ class DispersionEngine {
     return { card, live, pcm };
   }
 
+  private pushTrail(canal: CanalState, live: CanalLive) {
+    const trail = this.filaments[canal.id] ?? [];
+    const x = Math.min(1, Math.max(0, live.centroid / 3600));
+    const y = live.f0 == null ? 0.08 : Math.min(1, Math.max(0, (live.f0 - 70) / 230));
+    trail.push({ id: canal.id, ink: canal.ink, x, y, voiced: live.voiced });
+    if (trail.length > FILAMENT_CAP) trail.splice(0, trail.length - FILAMENT_CAP);
+    this.filaments[canal.id] = trail;
+  }
+
   private tick = () => {
     if (!this.snap.playing) return;
     const ctx = this.ctx;
@@ -430,17 +539,17 @@ class DispersionEngine {
     const t = (ctx.currentTime - this.startedAt) % this.loopDur;
     const canals = this.snap.canals.map((canal) => {
       if (canal.pcm.length < 400) return canal;
+      // A recording loops with the house; the Mic canal is always its newest frame.
+      if (canal.kind === "mic") {
+        this.pushTrail(canal, canal.live);
+        return canal;
+      }
       const off = Math.min(
         Math.max(0, Math.floor((t % Math.max(0.01, canal.duration)) * SAMPLE_RATE)),
         canal.pcm.length - 400,
       );
       const live = liveFromFrame(extractFrame(canal.pcm, off));
-      const trail = this.filaments[canal.id] ?? [];
-      const x = Math.min(1, Math.max(0, live.centroid / 3600));
-      const y = live.f0 == null ? 0.08 : Math.min(1, Math.max(0, (live.f0 - 70) / 230));
-      trail.push({ id: canal.id, ink: canal.ink, x, y, voiced: live.voiced });
-      if (trail.length > FILAMENT_CAP) trail.splice(0, trail.length - FILAMENT_CAP);
-      this.filaments[canal.id] = trail;
+      this.pushTrail(canal, live);
       return { ...canal, live };
     });
     this.snap = { ...this.snap, canals, playhead: t / this.loopDur };

@@ -9,7 +9,7 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/audio/corti.test.ts src/lib/audio/recognize.test.ts src/lib/audio/war.test.ts src/lib/audio/engine.test.ts src/lib/encoder/stream.test.ts src/lib/encoder/gb18030.test.ts src/lib/discern.test.ts src/lib/offline.test.ts src/lib/audio/frames.test.ts src/lib/audio/vocoder.test.ts src/lib/audio/align.test.ts src/lib/audio/bank.test.ts src/lib/audio/stitch.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/audio/corti.test.ts src/lib/audio/recognize.test.ts src/lib/audio/war.test.ts src/lib/audio/engine.test.ts src/lib/audio/mic-tape.test.ts src/lib/encoder/stream.test.ts src/lib/encoder/gb18030.test.ts src/lib/discern.test.ts src/lib/offline.test.ts src/lib/audio/frames.test.ts src/lib/audio/vocoder.test.ts src/lib/audio/align.test.ts src/lib/audio/bank.test.ts src/lib/audio/stitch.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

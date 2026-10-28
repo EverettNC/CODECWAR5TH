@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { isEncodingId, type EncodingId } from "@/lib/encoder/stream";
 import type { SceneId } from "@/lib/audio/scenes";
 
-export type Room = "filament" | "codec" | "booth" | "dispersion" | "war";
+export type Room = "filament" | "codec" | "booth" | "frames" | "dispersion" | "war";
 export type CodecFace = "encoder" | "decoder";
 export type View = "field" | "canals" | "refused";
 
@@ -91,7 +91,12 @@ export const useStudio = create<StudioState>((set) => ({
 
 function isRoom(v: unknown): v is Room {
   return (
-    v === "filament" || v === "codec" || v === "booth" || v === "dispersion" || v === "war"
+    v === "filament" ||
+    v === "codec" ||
+    v === "booth" ||
+    v === "frames" ||
+    v === "dispersion" ||
+    v === "war"
   );
 }
 

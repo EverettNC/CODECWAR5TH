@@ -4,6 +4,7 @@ import { BoothRoom } from "@/components/booth-room";
 import { DispersionRoom } from "@/components/dispersion-room";
 import { EncoderRoom } from "@/components/encoder-room";
 import { FilamentRoom } from "@/components/filament-room";
+import { FramesRoom } from "@/components/frames-room";
 import { WarRoom } from "@/components/war-room";
 import { engine as codecEngine } from "@/lib/audio/codec-engine";
 import { engine as dispersionEngine } from "@/lib/audio/engine";
@@ -14,6 +15,7 @@ const ROOMS: { id: Room; label: string }[] = [
   { id: "filament", label: "Filament" },
   { id: "codec", label: "Codec" },
   { id: "booth", label: "Booth" },
+  { id: "frames", label: "Frames" },
   { id: "dispersion", label: "Dispersion" },
   { id: "war", label: "War" },
 ];
@@ -42,8 +44,9 @@ export function Studio() {
       if (e.key === "1") setRoom("filament");
       if (e.key === "2") setRoom("codec");
       if (e.key === "3") setRoom("booth");
-      if (e.key === "4") setRoom("dispersion");
-      if (e.key === "5") setRoom("war");
+      if (e.key === "4") setRoom("frames");
+      if (e.key === "5") setRoom("dispersion");
+      if (e.key === "6") setRoom("war");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -133,6 +136,7 @@ export function Studio() {
         {room === "filament" ? <FilamentRoom /> : null}
         {room === "codec" ? <EncoderRoom /> : null}
         {room === "booth" ? <BoothRoom /> : null}
+        {room === "frames" ? <FramesRoom /> : null}
         {room === "dispersion" ? <DispersionRoom /> : null}
         {room === "war" ? <WarRoom /> : null}
       </main>
@@ -141,7 +145,7 @@ export function Studio() {
         className="fixed inset-x-0 bottom-0 border-t border-border bg-bg/95 px-1.5 pt-1.5 pb-[max(2.75rem,calc(0.5rem+env(safe-area-inset-bottom)))] sm:hidden"
         aria-label="Stations"
       >
-        <div className="grid grid-cols-5 gap-0.5">
+        <div className="grid grid-cols-6 gap-0.5">
           {ROOMS.map((r) => (
             <button
               key={r.id}

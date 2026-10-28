@@ -58,11 +58,14 @@ export const JOIN_SMOOTH = 3;
 /** Silence before and after a sentence, frames: 20 (100 ms) taken from the recording around the first and last units. */
 export const EDGE_FRAMES = 20;
 
-export type TargetWord = { word: string; phones: string[] };
+/** A word to speak. pauseAfter: the text pauses after it (a comma, a full stop): a recorded pause follows, and the words either side open and close a phrase. */
+export type TargetWord = { word: string; phones: string[]; pauseAfter?: boolean };
 
 export type Selection = {
   units: number[];
-  joins: number; // joins not in the recordings
+  /** Indices into units after which the text pauses. */
+  pausesAfter: number[];
+  joins: number; // joins not in the recordings (a pause is not a join)
   wholeWords: number; // target words spoken by one recorded word, start to end
   cost: number;
 };
@@ -88,10 +91,10 @@ function targets(words: TargetWord[]): Target[] {
         word: w.word,
         pos: pi,
         wordLen: w.phones.length,
-        prev: pi > 0 ? w.phones[pi - 1]! : prevWord ? prevWord.phones[prevWord.phones.length - 1]! : "SIL",
-        next: pi < w.phones.length - 1 ? w.phones[pi + 1]! : nextWord ? nextWord.phones[0]! : "SIL",
-        first: wi === 0,
-        last: wi === words.length - 1,
+        prev: pi > 0 ? w.phones[pi - 1]! : prevWord && !prevWord.pauseAfter ? prevWord.phones[prevWord.phones.length - 1]! : "SIL",
+        next: pi < w.phones.length - 1 ? w.phones[pi + 1]! : nextWord && !w.pauseAfter ? nextWord.phones[0]! : "SIL",
+        first: wi === 0 || !!prevWord?.pauseAfter,
+        last: wi === words.length - 1 || !!w.pauseAfter,
       });
     });
   });
@@ -154,6 +157,13 @@ function joinCost(bank: Bank, ui: number, vi: number) {
 export function selectUnits(bank: Bank, words: TargetWord[], med: Map<string, number> = phoneMedians(bank)): Selection {
   const tg = targets(words);
   if (!tg.length) throw new StitchRefused("nothing to say");
+  // Where the text pauses: after the last phone of a word with pauseAfter (not the sentence's last).
+  const pauseAt = new Set<number>();
+  let p = 0;
+  words.forEach((w, wi) => {
+    p += w.phones.length;
+    if (w.pauseAfter && wi < words.length - 1) pauseAt.add(p - 1);
+  });
   const byPhone = new Map<string, number[]>();
   bank.units.forEach((u, i) => {
     const l = byPhone.get(u.phone) ?? [];
@@ -192,7 +202,8 @@ export function selectUnits(bank: Bank, words: TargetWord[], med: Map<string, nu
       let best = Infinity;
       let arg = 0;
       prev.forEach((u, b) => {
-        const s = score[b]! + joinCost(bank, u, v);
+        // Across a pause the two sides need not meet: silence lies between them.
+        const s = score[b]! + (pauseAt.has(i - 1) ? 0 : joinCost(bank, u, v));
         if (s < best) {
           best = s;
           arg = b;
@@ -215,7 +226,7 @@ export function selectUnits(bank: Bank, words: TargetWord[], med: Map<string, nu
     k = back[i]![k]!;
   }
   let joins = 0;
-  for (let i = 1; i < chosen.length; i++) if (bank.units[chosen[i - 1]!]!.succ !== chosen[i]) joins++;
+  for (let i = 1; i < chosen.length; i++) if (!pauseAt.has(i - 1) && bank.units[chosen[i - 1]!]!.succ !== chosen[i]) joins++;
   let wholeWords = 0;
   let at = 0;
   for (const w of words) {
@@ -226,7 +237,7 @@ export function selectUnits(bank: Bank, words: TargetWord[], med: Map<string, nu
     if (whole) wholeWords++;
     at += w.phones.length;
   }
-  return { units: chosen, joins, wholeWords, cost };
+  return { units: chosen, pausesAfter: [...pauseAt].sort((a, b) => a - b), joins, wholeWords, cost };
 }
 
 export type Stitched = {
@@ -284,12 +295,18 @@ export function joinUnits(bank: Bank, sel: Selection): Stitched {
   // in the same recording. Never the end of another word.
   const lead = first.phraseStart ? [Math.max(0, first.start - EDGE_FRAMES), first.start] : pauseFrames(bank, first.rec);
   for (let i = lead[0]!; i < lead[1]!; i++) push(ft, i, "SIL");
+  const pauses = new Set(sel.pausesAfter);
   sel.units.forEach((ui, n) => {
     const u = bank.units[ui]!;
-    if (n > 0 && bank.units[sel.units[n - 1]!]!.succ !== ui) joinsAt.push(f0.length);
+    if (n > 0 && !pauses.has(n - 1) && bank.units[sel.units[n - 1]!]!.succ !== ui) joinsAt.push(f0.length);
     const t = bank.tracks[u.rec]!;
     rec = u.rec;
     for (let i = u.start; i < u.end; i++) push(t, i, u.phone);
+    if (pauses.has(n)) {
+      // The text pauses here: the recording's own pause, not a made-up silence.
+      const [a, b] = pauseFrames(bank, u.rec);
+      for (let i = a; i < b; i++) push(t, i, "SIL");
+    }
   });
   const lt = bank.tracks[last.rec]!;
   rec = last.rec;
@@ -412,6 +429,7 @@ export type VoiceMeasures = {
  * median; the recordings' pitch movement is kept around it. null = measured.
  */
 export type Controls = {
+  cadence: number;
   breath: number;
   jitter: number;
   shimmer: number;
@@ -426,6 +444,7 @@ export type Controls = {
 };
 
 export const NEUTRAL_CONTROLS: Controls = {
+  cadence: 0.5,
   breath: 0.5,
   jitter: 0.5,
   shimmer: 0.5,
@@ -444,8 +463,8 @@ export type Applied = { name: string; measured: number | string; control: number
 
 /** A control at 0 or 1 moves the measured quantity by `octaves` octaves each way (2^-octaves to 2^octaves). */
 const span = (c: number, octaves: number) => 2 ** ((c - 0.5) * 2 * octaves);
-/** How far each control reaches: breath, intonation, jitter and shimmer halve or double; prosody 0.71x to 1.41x; articulation 0.76x to 1.32x. */
-const REACH = { breath: 1, intonation: 1, jitter: 1, shimmer: 1, prosody: 0.5, articulation: 0.4 } as const;
+/** How far each control reaches: breath, intonation, jitter and shimmer halve or double; prosody 0.71x to 1.41x; articulation 0.76x to 1.32x; cadence 0.84x to 1.19x on the speaking rate, the inverse on pauses. */
+const REACH = { breath: 1, intonation: 1, jitter: 1, shimmer: 1, prosody: 0.5, articulation: 0.4, cadence: 0.25 } as const;
 /** Corrections are clamped so a short sentence cannot be pushed past what the voice does. */
 const CLAMP = {
   /** pitch range factor */ range: [0.5, 2] as const,
@@ -499,7 +518,7 @@ export function checkMeasures(m: Partial<VoiceMeasures>): VoiceMeasures {
 
 /** Refuse a control that is missing, out of range, or one this mouth cannot apply. */
 export function checkControls(c: Partial<Controls>): Controls {
-  const nums: (keyof Controls)[] = ["breath", "jitter", "shimmer", "timbre", "articulation", "intonation", "prosody"];
+  const nums: (keyof Controls)[] = ["cadence", "breath", "jitter", "shimmer", "timbre", "articulation", "intonation", "prosody"];
   const bad: string[] = nums.filter((k) => typeof c[k] !== "number" || !((c[k] as number) >= 0 && (c[k] as number) <= 1));
   if (typeof c.resonance !== "string" || !(c.resonance in RESONANCE_WARP)) bad.push("resonance (chest, mid or head)");
   if (typeof c.rate !== "number" || !(c.rate >= RATE_RANGE[0] && c.rate <= RATE_RANGE[1])) bad.push(`rate (${RATE_RANGE[0]} to ${RATE_RANGE[1]})`);
@@ -571,12 +590,14 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   let nuclei = 0;
   for (let i = 0; i < phones.length; i++) if (VOWELS.has(phones[i]!) && (i === 0 || phones[i - 1] !== phones[i])) nuclei++;
   const rate = speech > 0 ? nuclei / ((speech * t.hop) / t.sr) : m.syllable_rate;
-  const wantRate = m.syllable_rate * c.rate;
+  const cad = span(c.cadence, REACH.cadence);
+  const wantRate = m.syllable_rate * c.rate * cad;
   const timeFactor = clamp(rate / wantRate, CLAMP.time[0], CLAMP.time[1]);
   const consonant = span(c.articulation, REACH.articulation / 2);
-  const stretch = phones.map((p) => (p === "SIL" ? 1 : VOWELS.has(p) ? timeFactor : timeFactor * consonant));
+  const stretch = phones.map((p) => (p === "SIL" ? 1 / cad : VOWELS.has(p) ? timeFactor : timeFactor * consonant));
   ({ t, phones, recOf } = resample(t, phones, recOf, stretch));
   applied.push({ name: "rate", measured: m.syllable_rate, control: c.rate, applied: `syllable rate ${rate.toFixed(2)}/s -> ${(rate / timeFactor).toFixed(2)}/s (time x${timeFactor.toFixed(3)})`, value: timeFactor });
+  applied.push({ name: "cadence", measured: m.syllable_rate, control: c.cadence, applied: `speaking rate x${cad.toFixed(3)} (in the rate above), pauses and edges x${(1 / cad).toFixed(3)}`, value: cad });
   applied.push({ name: "articulation", measured: "consonant and vowel timing of the recordings", control: c.articulation, applied: `consonant frames x${consonant.toFixed(3)} against vowels`, value: consonant });
 
   // Intonation and pitch: the sentence's range to the voice's phrase range, around the measured (or asked) median.

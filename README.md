@@ -118,6 +118,10 @@ npm run dev        # http://127.0.0.1:9597
 npm test           # the pipeline's own suite
 ```
 
+Or `./startup.sh`: installs dependencies if they are missing, starts the dev
+server in the background on 127.0.0.1:9597 (`CODECWAR_PORT` to change it) and
+waits until it answers. `./startup.sh stop` stops the server it started.
+
 The sovereign Filament ear is a separate process (THEFILAMENT, port 4850). Start
 it for live mic transcription; without it, the Filament room falls back to the
 in-tab recognizer.

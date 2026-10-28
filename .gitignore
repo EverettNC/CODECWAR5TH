@@ -13,3 +13,6 @@ dist/
 
 # Mac
 .DS_Store
+
+# dev server pid written by startup.sh
+.dev-server.pid

@@ -467,7 +467,7 @@ class DispersionEngine {
   stop() {
     this.snap = { ...this.snap, playing: false, playhead: 0 };
     this.applyGains();
-    cancelAnimationFrame(this.raf);
+    this.cancelTick();
     this.emit();
   }
 
@@ -477,8 +477,13 @@ class DispersionEngine {
     this.stopMic();
   }
 
+  private cancelTick() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+  }
+
   private stopNodes() {
-    cancelAnimationFrame(this.raf);
+    this.cancelTick();
     for (const n of this.nodes) {
       try {
         n.source.stop();

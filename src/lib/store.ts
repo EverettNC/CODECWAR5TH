@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { isEncodingId, type EncodingId } from "@/lib/encoder/stream";
-import type { SceneId } from "@/lib/audio/scenes";
+import { isEncodingId, type EncodingId } from "./encoder/stream.ts";
+import type { SceneId } from "./audio/scenes.ts";
 
 export type Room = "filament" | "codec" | "booth" | "frames" | "dispersion" | "war";
 export type CodecFace = "encoder" | "decoder";

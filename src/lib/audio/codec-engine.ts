@@ -224,7 +224,8 @@ class AudioEngine {
   }
 
   stopPlayback() {
-    cancelAnimationFrame(this.raf);
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
     try {
       this.playing?.stop();
     } catch {

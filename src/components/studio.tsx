@@ -6,8 +6,7 @@ import { EncoderRoom } from "@/components/encoder-room";
 import { FilamentRoom } from "@/components/filament-room";
 import { FramesRoom } from "@/components/frames-room";
 import { WarRoom } from "@/components/war-room";
-import { engine as codecEngine } from "@/lib/audio/codec-engine";
-import { engine as dispersionEngine } from "@/lib/audio/engine";
+import { onRoomKey, switchRoom } from "@/lib/rooms";
 import { hydrateStudio, persistStudio, useStudio, type Room } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -22,7 +21,6 @@ const ROOMS: { id: Room; label: string }[] = [
 
 export function Studio() {
   const room = useStudio((s) => s.room);
-  const setRoom = useStudio((s) => s.setRoom);
   const listening = useStudio((s) => s.listening);
 
   useEffect(() => {
@@ -30,37 +28,17 @@ export function Studio() {
     return useStudio.subscribe((s) => persistStudio(s));
   }, []);
 
+  // Number keys take the same path as the nav buttons: the mic and playback
+  // of the room being left are closed (src/lib/rooms.ts).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.tagName === "SELECT" ||
-          t.isContentEditable)
-      )
-        return;
-      if (e.key === "1") setRoom("filament");
-      if (e.key === "2") setRoom("codec");
-      if (e.key === "3") setRoom("booth");
-      if (e.key === "4") setRoom("frames");
-      if (e.key === "5") setRoom("dispersion");
-      if (e.key === "6") setRoom("war");
+      onRoomKey(e);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setRoom]);
+  }, []);
 
-  const go = (next: Room) => {
-    if (next !== "filament" && next !== "booth") {
-      void codecEngine.stopMic();
-      codecEngine.stopPlayback();
-      useStudio.getState().setListening(false);
-    }
-    if (next !== "dispersion" && next !== "war") dispersionEngine.lastStop();
-    setRoom(next);
-  };
+  const go = (next: Room) => switchRoom(next);
 
   const current = ROOMS.find((r) => r.id === room);
 

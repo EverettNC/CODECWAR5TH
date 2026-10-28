@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { engine } from "@/lib/audio/engine";
 import { discernCanals } from "@/lib/discern";
 import { SCENES, type SceneId } from "@/lib/audio/scenes";
+import { mixAnalysisLabel } from "@/lib/audio/war";
 import { useStudio, type View } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +47,10 @@ export function DispersionRoom() {
 
   const snap = engine.snap;
   const n = snap.canals.length;
+  // The mix is measured only for the ghost: by the tick while playing with the
+  // ghost on, or by the Refused view. Say which, from what actually ran.
+  const mixMeasured =
+    Boolean(snap.fused) || (view === "refused" && engine.computeFused() !== null);
 
   const open = async (id: SceneId) => {
     setScene(id);
@@ -186,7 +191,7 @@ export function DispersionRoom() {
       ) : null}
 
       <p className="font-mono text-xs tracking-widest text-subtle uppercase">
-        {n} canal{n === 1 ? "" : "s"} · 0 fused · mix analysis sealed
+        {n} canal{n === 1 ? "" : "s"} · 0 fused · {mixAnalysisLabel(mixMeasured)}
       </p>
 
       {view === "field" ? (

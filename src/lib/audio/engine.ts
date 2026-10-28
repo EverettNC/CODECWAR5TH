@@ -1,6 +1,4 @@
 import {
-  EMPTY_CARD,
-  EMPTY_LIVE,
   cardFromFrames,
   fusePcm,
   liveFromFrame,
@@ -118,6 +116,7 @@ class DispersionEngine {
     stream: MediaStream;
     source: MediaStreamAudioSourceNode;
   } | null = null;
+  private fusedCache: { key: Float32Array[]; pcm: Float32Array; card: CortiCard } | null = null;
   private raf = 0;
   private startedAt = 0;
   private loopDur = 1;
@@ -396,16 +395,32 @@ class DispersionEngine {
     this.nodes = [];
   }
 
-  computeFused(): FusedGhost | null {
+  /**
+   * The mix and its card, built once per set of canal recordings. The tick
+   * calls computeFused every animation frame; only the live frame at the
+   * playhead is new each time, so only that is measured each time.
+   */
+  private fusedBase(): { pcm: Float32Array; card: CortiCard } | null {
     const pcms = this.snap.canals.filter((c) => c.pcm.length > 32).map((c) => c.pcm);
     if (pcms.length < 2) return null;
+    const cached = this.fusedCache;
+    if (cached && cached.key.length === pcms.length && cached.key.every((p, i) => p === pcms[i])) {
+      return cached;
+    }
     const pcm = fusePcm(pcms);
-    const frames = extractFrames(pcm);
+    this.fusedCache = { key: pcms, pcm, card: cardFromFrames(extractFrames(pcm)) };
+    return this.fusedCache;
+  }
+
+  computeFused(): FusedGhost | null {
+    const base = this.fusedBase();
+    if (!base) return null;
+    const { pcm, card } = base;
     const ctx = this.ctx;
     const t = ctx && this.snap.playing ? (ctx.currentTime - this.startedAt) % this.loopDur : 0;
     const off = Math.min(Math.max(0, Math.floor(t * SAMPLE_RATE)), Math.max(0, pcm.length - 400));
     const live = liveFromFrame(extractFrame(pcm, off));
-    return { card: cardFromFrames(frames), live, pcm };
+    return { card, live, pcm };
   }
 
   private tick = () => {

@@ -153,10 +153,17 @@ export function DispersionRoom() {
             Open the room
           </Button>
         )}
-        <Button variant="ghost" onClick={() => void engine.addMic()}>
-          <Mic />
-          Mic canal
-        </Button>
+        {engine.micOpen ? (
+          <Button variant="quiet" onClick={() => engine.stopMicCanal()}>
+            <Square className="size-3.5 fill-current" />
+            Stop mic
+          </Button>
+        ) : (
+          <Button variant="ghost" onClick={() => void engine.addMic()}>
+            <Mic />
+            Mic canal
+          </Button>
+        )}
         <Button variant="ghost" onClick={() => fileRef.current?.click()}>
           <Upload />
           File canal

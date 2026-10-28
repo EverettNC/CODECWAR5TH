@@ -74,7 +74,10 @@ its value, or refuses with the reason. Christman-Sound carries the runtime port
 ### 5 · Dispersion — many canals
 One canal is Filament → Codec → Booth. This room keeps many, because speakers do
 not join. Three views: **Field** (see them all), **Canals** (each one named),
-**Refused** (the law). Fed by a **Mic canal** or a **File canal**. Three built
+**Refused** (the law). Fed by a **Mic canal** or a **File canal**. The Mic
+canal records the microphone itself (raw: echo cancellation, noise suppression
+and auto gain off), keeps its last 6.4 seconds, and measures it frame by frame
+as it arrives; it is never played back through the speakers. Three built
 scenes: **Kitchen table** (Voice A, Voice B, Kettle), **Two booths** (Booth A,
 Booth B), and **Crisis overlap** (three voices at once). Press **Discern canals**
 to pull them apart; show or hide the **refused ghost** — the overlap it will not

@@ -97,10 +97,15 @@ class Reader:
         return float(self._sized("d"))
 
     def boolean(self) -> bool:
-        tok = self.token()
-        if tok not in ("T", "F"):
-            raise self._fail(f"bool token {tok!r}")
-        return tok == "T"
+        """A bool is one byte, T or F, with nothing after it: '<TestMode> F<Count> '."""
+        self.skip_space()
+        if self.pos >= len(self.buf):
+            raise self._fail("bool past end of file")
+        ch = chr(self.buf[self.pos])
+        if ch not in ("T", "F"):
+            raise self._fail(f"bool byte {ch!r}")
+        self.pos += 1
+        return ch == "T"
 
     def int_vector(self) -> np.ndarray:
         self.skip_space()

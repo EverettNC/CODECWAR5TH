@@ -362,24 +362,28 @@ export function trackLevel(t: FrameTrack, from = 0, to = t.n): number {
 }
 
 /** Meet in the middle across a join: each side moves toward the midpoint, fully at the join, fading over JOIN_SMOOTH frames. */
+function blendJoin(arr: Float64Array, j: number, width: number, n: number) {
+  const L = j - 1;
+  const R = j;
+  if (L < 0 || R >= n) return;
+  for (let k = 0; k < width; k++) {
+    const mid = 0.5 * (arr[L * width + k]! + arr[R * width + k]!);
+    const dl = mid - arr[L * width + k]!;
+    const dr = mid - arr[R * width + k]!;
+    for (let s = 0; s < JOIN_SMOOTH; s++) {
+      const w = (JOIN_SMOOTH - s) / JOIN_SMOOTH;
+      if (L - s >= 0) arr[(L - s) * width + k] = arr[(L - s) * width + k]! + dl * w;
+      if (R + s < n) arr[(R + s) * width + k] = arr[(R + s) * width + k]! + dr * w;
+    }
+  }
+}
+
 function smoothJoin(t: FrameTrack, j: number) {
   const L = j - 1;
   const R = j;
   if (L < 0 || R >= t.n) return;
-  const blend = (arr: Float64Array, width: number) => {
-    for (let k = 0; k < width; k++) {
-      const mid = 0.5 * (arr[L * width + k]! + arr[R * width + k]!);
-      const dl = mid - arr[L * width + k]!;
-      const dr = mid - arr[R * width + k]!;
-      for (let s = 0; s < JOIN_SMOOTH; s++) {
-        const w = (JOIN_SMOOTH - s) / JOIN_SMOOTH;
-        if (L - s >= 0) arr[(L - s) * width + k] = arr[(L - s) * width + k]! + dl * w;
-        if (R + s < t.n) arr[(R + s) * width + k] = arr[(R + s) * width + k]! + dr * w;
-      }
-    }
-  };
-  blend(t.envDb, ENV_POINTS);
-  blend(t.ap, AP_BANDS);
+  blendJoin(t.envDb, j, ENV_POINTS, t.n);
+  blendJoin(t.ap, j, AP_BANDS, t.n);
   // Pitch, in semitones, only across a voiced-to-voiced join and only over voiced frames.
   if (t.f0[L]! > 0 && t.f0[R]! > 0) {
     const sl = Math.log2(t.f0[L]!);
@@ -612,6 +616,38 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   let phones = st.phones;
   let recOf = st.recOf;
 
+  // Each session's envelope and level to the voice's (smoothed over 9 grid
+  // points, clamped), so units from different sessions sound like one voice;
+  // the sentence's own vowels are never averaged away. Applied first, to the
+  // stitched frames, and smoothed across each join exactly as joinUnits
+  // smoothed the frames there. (Until 2026-10-29 it was added after the joins
+  // were smoothed, frame by frame by session, so a join between two sessions
+  // became a step the size of the difference between their corrections: two
+  // sessions 7 dB apart gave a 7 dB step in one frame.)
+  const corrs = recStats.map((rs) => {
+    const gain = Number.isFinite(rs.level) ? clamp(m.level_db - rs.level, -CLAMP.level_db, CLAMP.level_db) : 0;
+    const raw = new Float64Array(ENV_POINTS);
+    for (let k = 0; k < ENV_POINTS; k++) raw[k] = Number.isFinite(rs.ltas[k]!) ? m.ltas_db[k]! - rs.ltas[k]! : 0;
+    const out = new Float64Array(ENV_POINTS);
+    for (let k = 0; k < ENV_POINTS; k++) {
+      let s = 0;
+      let q = 0;
+      for (let d = -4; d <= 4; d++) {
+        const j = k + d;
+        if (j >= 0 && j < ENV_POINTS) {
+          s += raw[j]!;
+          q++;
+        }
+      }
+      out[k] = clamp(s / q, -CLAMP.ltas_db, CLAMP.ltas_db) + gain;
+    }
+    return out;
+  });
+  const corrTrack = new Float64Array(t.n * ENV_POINTS);
+  for (let i = 0; i < t.n; i++) corrTrack.set(corrs[recOf[i]!]!, i * ENV_POINTS);
+  for (const j of st.joinsAt) blendJoin(corrTrack, j, ENV_POINTS, t.n);
+  for (let k = 0; k < t.envDb.length; k++) t.envDb[k] = t.envDb[k]! + corrTrack[k]!;
+
   // Cadence (rate) and articulation: time, by resampling the frame sequence.
   const speech = phones.filter((p) => p !== "SIL").length;
   let nuclei = 0;
@@ -658,29 +694,8 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   for (let i = 0; i < t.n; i++) if (t.f0[i]! > 0) for (let b = 0; b < AP_BANDS; b++) t.ap[i * AP_BANDS + b] = Math.min(1, t.ap[i * AP_BANDS + b]! * apFactor);
   applied.push({ name: "breath", measured: m.stitched_aperiodicity, control: c.breath, applied: `voiced aperiodicity ${apNow.toFixed(3)} x${apFactor.toFixed(3)} to ${apWant.toFixed(4)} (calibrated for stitched speech; recordings: HNR ${m.hnr_db.toFixed(1)} dB, CPP ${m.cpp_db.toFixed(1)} dB)`, value: apFactor });
 
-  // Resonance and timbre. Each session's envelope and level to the voice's
-  // (smoothed over 9 grid points, clamped), so units from different sessions
-  // sound like one voice; the sentence's own vowels are never averaged away.
-  // Then the controls' warp and tilt.
-  const corrs = recStats.map((rs) => {
-    const gain = Number.isFinite(rs.level) ? clamp(m.level_db - rs.level, -CLAMP.level_db, CLAMP.level_db) : 0;
-    const raw = new Float64Array(ENV_POINTS);
-    for (let k = 0; k < ENV_POINTS; k++) raw[k] = Number.isFinite(rs.ltas[k]!) ? m.ltas_db[k]! - rs.ltas[k]! : 0;
-    const out = new Float64Array(ENV_POINTS);
-    for (let k = 0; k < ENV_POINTS; k++) {
-      let s = 0;
-      let q = 0;
-      for (let d = -4; d <= 4; d++) {
-        const j = k + d;
-        if (j >= 0 && j < ENV_POINTS) {
-          s += raw[j]!;
-          q++;
-        }
-      }
-      out[k] = clamp(s / q, -CLAMP.ltas_db, CLAMP.ltas_db) + gain;
-    }
-    return out;
-  });
+  // Resonance and timbre: the controls' warp and tilt (each session's
+  // correction went in first, above).
   let maxCorr = 0;
   for (const r of new Set(recOf)) for (let k = 0; k < ENV_POINTS; k++) maxCorr = Math.max(maxCorr, Math.abs(corrs[r]![k]!));
   const grid = envGridHz(t.sr);
@@ -688,8 +703,7 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   const tilt = -(c.timbre - 0.5) * TIMBRE_DB_PER_OCT;
   const row = new Float64Array(ENV_POINTS);
   for (let i = 0; i < t.n; i++) {
-    const corr = corrs[recOf[i]!]!;
-    for (let k = 0; k < ENV_POINTS; k++) row[k] = t.envDb[i * ENV_POINTS + k]! + corr[k]!;
+    for (let k = 0; k < ENV_POINTS; k++) row[k] = t.envDb[i * ENV_POINTS + k]!;
     for (let k = 0; k < ENV_POINTS; k++) {
       const f = grid[k]!;
       const src = f / warp;

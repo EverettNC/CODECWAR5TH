@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from earcore.kio import open_kaldi, read_conf, read_text_matrix  # noqa: E402
+from earcore.kio import open_model, read_conf, read_text_matrix  # noqa: E402
 
 MODEL = Path(os.environ.get("EAR_MODEL") or Path.home() / "models" / "vosk-model-en-us-0.22")
 IV = MODEL / "ivector"
@@ -22,7 +22,7 @@ IV = MODEL / "ivector"
 @unittest.skipUnless(IV.is_dir(), f"model is not on disk at {MODEL}; not run")
 class ReadsTheModel(unittest.TestCase):
     def test_diag_ubm(self) -> None:
-        r = open_kaldi(IV / "final.dubm")
+        r = open_model(IV / "final.dubm")
         r.expect("<DiagGMM>")
         r.expect("<GCONSTS>")
         gconsts = r.vector()
@@ -42,7 +42,7 @@ class ReadsTheModel(unittest.TestCase):
         self.assertTrue((inv_vars > 0).all())
 
     def test_ivector_extractor(self) -> None:
-        r = open_kaldi(IV / "final.ie")
+        r = open_model(IV / "final.ie")
         r.expect("<IvectorExtractor>")
         r.expect("<w>")
         w = r.matrix()
@@ -68,7 +68,7 @@ class ReadsTheModel(unittest.TestCase):
         self.assertGreater(offset, 0)
 
     def test_lda_and_cmvn_and_conf(self) -> None:
-        lda = open_kaldi(IV / "final.mat").matrix()
+        lda = open_model(IV / "final.mat").matrix()
         self.assertEqual(lda.shape[0], 40)
         self.assertIn(lda.shape[1], (280, 281))
         stats = read_text_matrix(IV / "global_cmvn.stats")
@@ -79,7 +79,7 @@ class ReadsTheModel(unittest.TestCase):
         self.assertEqual(read_conf(IV / "splice.conf"), {"left-context": "3", "right-context": "3"})
 
     def test_transition_model_head(self) -> None:
-        r = open_kaldi(MODEL / "am" / "final.mdl")
+        r = open_model(MODEL / "am" / "final.mdl")
         r.expect("<TransitionModel>")
         r.expect("<Topology>")
         phones = r.int_vector()

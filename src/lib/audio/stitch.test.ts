@@ -9,6 +9,7 @@ import {
   joinUnits,
   recordingStats,
   selectUnits,
+  smoothContour,
   trackLtas,
   type Controls,
   type VoiceMeasures,
@@ -42,6 +43,9 @@ function measures(b: ReturnType<typeof bank>): VoiceMeasures {
     shimmer_carried: 0.02,
     hnr_db: 10,
     cpp_db: 15,
+    stitched_aperiodicity: 0.2,
+    stitched_jitter_carried: 0.006,
+    stitched_shimmer_carried: 0.025,
   };
 }
 const PARAMS = ["rate", "cadence", "articulation", "intonation", "f0", "breath", "resonance", "timbre", "prosody", "jitter", "shimmer", "affect"];
@@ -153,6 +157,63 @@ describe("applyVoice", () => {
     assert.throws(() => run({ breath: 1.5 }), /breath/);
     assert.throws(() => run({ rate: 3 }), /rate/);
     assert.throws(() => run({ resonance: "nasal" as Controls["resonance"] }), /resonance/);
-    assert.throws(() => applyVoice(st, { ...m, jitter: 0.004 }, NEUTRAL_CONTROLS, stats), /below/);
+    assert.throws(() => applyVoice(st, { ...m, stitched_aperiodicity: undefined }, NEUTRAL_CONTROLS, stats), /does not measure: stitched_aperiodicity/);
+  });
+
+  it("adds nothing when the stitched frames already carry more than wanted, and refuses a control asking for steadier", () => {
+    const m = { ...measures(b), jitter: 0.004 };
+    const v = applyVoice(st, m, NEUTRAL_CONTROLS, stats);
+    assert.equal(v.jitter, 0);
+    assert.match(v.applied.find((a) => a.name === "jitter")!.applied, /nothing added/);
+    assert.throws(() => applyVoice(st, m, { ...NEUTRAL_CONTROLS, jitter: 0.2 }, stats), /below the 0.0060/);
+  });
+
+  it("uses the stitched calibration, not the recordings' own, for breath and for what the frames carry", () => {
+    const m = measures(b);
+    const sum = (a: ArrayLike<number>) => Array.from(a).reduce((x, y) => x + y, 0);
+    const base = applyVoice(st, m, NEUTRAL_CONTROLS, stats);
+    assert.deepEqual(applyVoice(st, { ...m, voiced_aperiodicity: 0.05 }, NEUTRAL_CONTROLS, stats).track.ap, base.track.ap);
+    assert.ok(sum(applyVoice(st, { ...m, stitched_aperiodicity: 0.05 }, NEUTRAL_CONTROLS, stats).track.ap) < sum(base.track.ap));
+    const lessCarried = applyVoice(st, { ...m, stitched_jitter_carried: 0.001 }, NEUTRAL_CONTROLS, stats);
+    assert.ok(lessCarried.jitter > base.jitter);
+    assert.equal(applyVoice(st, { ...m, jitter_carried: 0.001 }, NEUTRAL_CONTROLS, stats).jitter, base.jitter);
+  });
+
+  it("scales the smoothed pitch contour and keeps the fast movement around it as it was", () => {
+    const f0 = st.track.f0.slice();
+    let k = 0;
+    for (let i = 0; i < f0.length; i++) if (f0[i]! > 0) f0[i] = f0[i]! * 2 ** ((k++ % 2 ? 0.15 : -0.15) / 12);
+    const wobbly = { ...st, track: { ...st.track, f0 } };
+    const wobble = (f: Float64Array) => {
+      const sm = smoothContour(f, 4);
+      let s = 0;
+      let n = 0;
+      for (let i = 0; i < f.length; i++)
+        if (f[i]! > 0) {
+          s += Math.abs(12 * Math.log2(f[i]!) - sm[i]!);
+          n++;
+        }
+      return s / n;
+    };
+    const wide = applyVoice(wobbly, measures(b), { ...NEUTRAL_CONTROLS, intonation: 1 }, stats);
+    const narrow = applyVoice(wobbly, measures(b), { ...NEUTRAL_CONTROLS, intonation: 0 }, stats);
+    const rw = wide.applied.find((a) => a.name === "intonation")!.value;
+    const rn = narrow.applied.find((a) => a.name === "intonation")!.value;
+    assert.ok(rw / rn >= 2, `range factors ${rw} and ${rn}`);
+    const ratio = wobble(wide.track.f0) / wobble(narrow.track.f0);
+    assert.ok(ratio > 0.8 && ratio < 1.25, `the fast movement changed x${ratio.toFixed(2)} with the range`);
+  });
+});
+
+describe("smoothContour", () => {
+  it("averages within each voiced run only, and leaves unvoiced frames at 0", () => {
+    const f = new Float64Array([0, 100, 200, 400, 0, 100]);
+    const s = smoothContour(f, 1);
+    const st = (x: number) => 12 * Math.log2(x);
+    assert.equal(s[0], 0);
+    assert.equal(s[4], 0);
+    assert.ok(Math.abs(s[1]! - (st(100) + st(200)) / 2) < 1e-12);
+    assert.ok(Math.abs(s[2]! - (st(100) + st(200) + st(400)) / 3) < 1e-12);
+    assert.ok(Math.abs(s[5]! - st(100)) < 1e-12);
   });
 });

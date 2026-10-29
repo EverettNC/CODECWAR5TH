@@ -39,15 +39,47 @@ export async function filamentHealth(): Promise<boolean> {
   }
 }
 
-/** Send one chunk of mono-16k float samples. reset on first, end on last. */
-export async function filamentLive(
-  samples: Float32Array,
-  opts: { reset?: boolean; end?: boolean } = {},
-): Promise<FilamentReply | null> {
+/**
+ * A stream name for one open page. The door keeps one stream per name, so
+ * this tab's words never mix with AlphaVox's, the Filament pages', or
+ * another Codec War tab's. Letters, digits, dot, dash, underscore, colon.
+ */
+export function newFilamentSession(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  const id =
+    c && typeof c.randomUUID === "function"
+      ? c.randomUUID()
+      : `${Date.now().toString(36)}-${Math.floor(Math.random() * 2 ** 48).toString(36)}`;
+  return `codec-war:${id}`;
+}
+
+/** This page's stream, made once when the page loads. */
+export const FILAMENT_SESSION = newFilamentSession();
+
+export type FilamentLiveOpts = {
+  reset?: boolean;
+  end?: boolean;
+  /** Defaults to this page's stream. */
+  session?: string;
+  /** The door. Defaults to the local Filament; tests point it at a spare port. */
+  door?: string;
+};
+
+export function filamentLiveUrl(opts: FilamentLiveOpts = {}): string {
   const q: string[] = [];
   if (opts.reset) q.push("reset=1");
   if (opts.end) q.push("end=1");
-  const url = `${EAR}/live${q.length ? "?" + q.join("&") : ""}`;
+  // The name is sent as is: the door takes only its own safe characters.
+  q.push(`session=${(opts.session ?? FILAMENT_SESSION).replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64)}`);
+  return `${opts.door ?? EAR}/live?${q.join("&")}`;
+}
+
+/** Send one chunk of mono-16k float samples. reset on first, end on last. */
+export async function filamentLive(
+  samples: Float32Array,
+  opts: FilamentLiveOpts = {},
+): Promise<FilamentReply | null> {
+  const url = filamentLiveUrl(opts);
   try {
     const body = floatToPcm16(samples);
     const r = await fetch(url, {

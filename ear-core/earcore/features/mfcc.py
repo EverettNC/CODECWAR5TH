@@ -1,11 +1,21 @@
 """MFCC features, computed the way the model's conf/mfcc.conf asks for them.
 
 Each frame: 400 samples (25 ms) every 160 samples (10 ms), frames kept inside
-the wave (snip edges). The DC offset is removed, then pre-emphasis 0.97, then
+the wave (snip edges). Dither noise is added to the frame, the DC offset is
+removed, then pre-emphasis 0.97, then
 the povey window, zero padding to 512, the power spectrum, 40 triangular mel
 bins from 20 to 7600 Hz with mel = 1127 ln(1 + f / 700), the log (floored at
-FLT_EPSILON), the DCT, and the lifter of 22. No energy term. Dither is 0 by
-Everett's ruling, so the same wave always gives the same features.
+FLT_EPSILON), the DCT, and the lifter of 22. No energy term.
+
+Dither: Gaussian noise of standard deviation `dither` (1.0, in int16 scale,
+unless conf/mfcc.conf says otherwise) is added to every sample of every
+extracted frame, each frame with its own noise. Without it, a stretch of
+digital silence gives every mel bin the log floor, a feature the network
+never met in training, and it hears a word that was not said. The noise is
+drawn from a counter-based generator keyed by the frame's index in the
+utterance and the sample's place in the frame, so the same wave always gives
+the same features, and MfccStream equals compute() bit for bit however the
+audio is cut into pieces.
 
 The wave is float32, mono, 16 kHz, at int16 scale (a sample of 1000 means 1000).
 """
@@ -37,7 +47,7 @@ _DEFAULTS: dict[str, str] = {
     "cepstral-lifter": "22",
     "use-energy": "true",
     "htk-compat": "false",
-    "dither": "0",
+    "dither": "1.0",
     "allow-upsample": "false",
     "allow-downsample": "false",
 }
@@ -120,6 +130,35 @@ def dct_matrix(num_ceps: int, num_bins: int) -> np.ndarray:
     return out
 
 
+_GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+_MIX1 = np.uint64(0xBF58476D1CE4E5B9)
+_MIX2 = np.uint64(0x94D049BB133111EB)
+
+
+def _mix(x: np.ndarray) -> np.ndarray:
+    """A 64-bit mixing function: every input bit reaches every output bit."""
+    z = x + _GOLDEN
+    z = (z ^ (z >> np.uint64(30))) * _MIX1
+    z = (z ^ (z >> np.uint64(27))) * _MIX2
+    return z ^ (z >> np.uint64(31))
+
+
+def frame_noise(first_frame: int, num_frames: int, length: int) -> np.ndarray:
+    """Standard Gaussian noise, (num_frames, length) float64, for frames
+    first_frame .. first_frame + num_frames - 1 of an utterance. Sample i of
+    frame t always gets the same value: two uniforms from the counter
+    2 (t length + i) and the one after it, through Box and Muller's transform."""
+    if num_frames <= 0:
+        return np.zeros((0, length))
+    t = np.arange(first_frame, first_frame + num_frames, dtype=np.uint64)[:, None]
+    i = np.arange(length, dtype=np.uint64)[None, :]
+    k = (t * np.uint64(length) + i) * np.uint64(2)
+    scale = 1.0 / float(1 << 53)
+    u1 = ((_mix(k) >> np.uint64(11)).astype(np.float64) + 0.5) * scale
+    u2 = ((_mix(k + np.uint64(1)) >> np.uint64(11)).astype(np.float64) + 0.5) * scale
+    return np.sqrt(-2.0 * np.log(u1)) * np.cos(2.0 * np.pi * u2)
+
+
 def lifter_coeffs(num_ceps: int, q: float) -> np.ndarray:
     """1 + 0.5 Q sin(pi i / Q)."""
     i = np.arange(num_ceps, dtype=np.float64)
@@ -138,8 +177,9 @@ class Mfcc:
         for k, want in _REQUIRED.items():
             if _bool(c[k]) != _bool(want):
                 raise ValueError(f"{conf_path}: --{k}={c[k]} is not built here")
-        if float(c["dither"]) != 0.0:
-            raise ValueError(f"{conf_path}: dither must be 0 in this ear")
+        self.dither = float(c["dither"])
+        if not (self.dither >= 0.0):
+            raise ValueError(f"{conf_path}: dither must be 0 or more")
         self.samp_freq = float(c["sample-frequency"])
         self.window_size = int(self.samp_freq * 0.001 * float(c["frame-length"]))
         self.window_shift = int(self.samp_freq * 0.001 * float(c["frame-shift"]))
@@ -172,8 +212,12 @@ class Mfcc:
             return 0
         return 1 + (num_samples - self.window_size) // self.window_shift
 
-    def compute(self, wave: np.ndarray) -> np.ndarray:
-        """float32 wave at int16 scale, mono, 16 kHz -> float32 (T, num_ceps)."""
+    def compute(self, wave: np.ndarray, first_frame: int = 0) -> np.ndarray:
+        """float32 wave at int16 scale, mono, 16 kHz -> float32 (T, num_ceps).
+
+        first_frame is the utterance index of the wave's first frame; it keys
+        the dither noise, so a later piece of one utterance gets that
+        utterance's noise."""
         x = np.asarray(wave, dtype=np.float32)
         if x.ndim != 1:
             raise ValueError("wave must be one channel")
@@ -182,13 +226,15 @@ class Mfcc:
         block = 2048  # frames per block keeps the working set in cache
         for s in range(0, t, block):
             e = min(t, s + block)
-            out[s:e] = self._frames(x, s, e)
+            out[s:e] = self._frames(x, s, e, first_frame)
         return out
 
-    def _frames(self, x: np.ndarray, s: int, e: int) -> np.ndarray:
+    def _frames(self, x: np.ndarray, s: int, e: int, first_frame: int = 0) -> np.ndarray:
         n = self.window_size
         idx = (np.arange(s, e) * self.window_shift)[:, None] + np.arange(n)[None, :]
         f = x[idx].astype(np.float64)
+        if self.dither != 0.0:
+            f += self.dither * frame_noise(first_frame + s, e - s, n)
         if self.remove_dc:
             f -= f.mean(axis=1, keepdims=True)
         if self.preemph != 0.0:
@@ -223,7 +269,7 @@ class MfccStream:
         if t <= self._frames_out:
             return np.zeros((0, m.num_ceps), dtype=np.float32)
         start = self._frames_out * m.window_shift - self._dropped
-        rows = m.compute(self._buf[start:])[: t - self._frames_out]
+        rows = m.compute(self._buf[start:], first_frame=self._frames_out)[: t - self._frames_out]
         self._frames_out = t
         keep_from = t * m.window_shift - self._dropped
         self._buf = self._buf[keep_from:]

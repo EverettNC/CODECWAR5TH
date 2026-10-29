@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ from earcore.features import Mfcc  # noqa: E402
 from earcore.features.mfcc import (  # noqa: E402
     FLT_EPSILON,
     dct_matrix,
+    frame_noise,
     lifter_coeffs,
     mel_banks,
     mel_scale,
@@ -90,6 +92,7 @@ class WithTheConf(unittest.TestCase):
         self.assertEqual((m.num_bins, m.num_ceps, m.dim), (40, 40, 40))
         self.assertEqual(m.preemph, 0.97)
         self.assertTrue(m.remove_dc)
+        self.assertEqual(m.dither, 1.0)  # the conf names none, so the standing value
 
     def test_frame_counts(self) -> None:
         m = self.m
@@ -101,7 +104,7 @@ class WithTheConf(unittest.TestCase):
     def test_one_frame_by_hand(self) -> None:
         rng = np.random.default_rng(7)
         x = rng.normal(0, 3000, 400).astype(np.float32)
-        f = x.astype(np.float64)
+        f = x.astype(np.float64) + 1.0 * frame_noise(0, 1, 400)[0]  # dither first
         f = f - f.mean()
         f = np.concatenate([[f[0] - 0.97 * f[0]], f[1:] - 0.97 * f[:-1]])
         f = f * window_function("povey", 400)
@@ -110,10 +113,28 @@ class WithTheConf(unittest.TestCase):
         want = (dct_matrix(40, 40) @ e) * lifter_coeffs(40, 22.0)
         np.testing.assert_allclose(self.m.compute(x)[0], want, rtol=1e-5, atol=1e-4)
 
-    def test_silence_hits_the_floor(self) -> None:
-        row = self.m.compute(np.zeros(400, dtype=np.float32))[0]
-        want = dct_matrix(40, 40) @ np.full(40, np.log(FLT_EPSILON)) * lifter_coeffs(40, 22.0)
-        np.testing.assert_allclose(row, want, rtol=1e-6, atol=1e-9)
+    def test_digital_silence_no_longer_hits_the_floor(self) -> None:
+        # Without dither, an all-zero frame puts every mel bin on the log floor:
+        # a feature the network never met, and it heard words that were not said.
+        with tempfile.TemporaryDirectory() as d:
+            conf = Path(d) / "mfcc.conf"
+            conf.write_text(CONF.read_text() + "\n--dither=0\n")
+            bare = Mfcc(conf).compute(np.zeros(400, dtype=np.float32))[0]
+        floor = dct_matrix(40, 40) @ np.full(40, np.log(FLT_EPSILON)) * lifter_coeffs(40, 22.0)
+        np.testing.assert_allclose(bare, floor, rtol=1e-6, atol=1e-9)
+        # With it, the same frame is quiet noise: c0 far above the floor's.
+        rows = self.m.compute(np.zeros(16000, dtype=np.float32))
+        self.assertTrue(np.all(np.isfinite(rows)))
+        self.assertGreater(float(rows[:, 0].min()), float(floor[0]) + 100.0)
+
+    def test_dither_noise_is_gaussian_and_fixed_per_frame(self) -> None:
+        z = frame_noise(0, 4000, 400)
+        self.assertAlmostEqual(float(z.mean()), 0.0, delta=0.005)
+        self.assertAlmostEqual(float(z.std()), 1.0, delta=0.005)
+        self.assertAlmostEqual(float(np.mean(np.abs(z) < 1.0)), 0.6827, delta=0.003)
+        np.testing.assert_array_equal(frame_noise(1234, 7, 400), z[1234:1241])
+        self.assertFalse(np.array_equal(z[0], z[1]))
+        self.assertLess(abs(float(np.corrcoef(z[:, :-1].ravel(), z[:, 1:].ravel())[0, 1])), 0.005)
 
     def test_dc_offset_removed(self) -> None:
         rng = np.random.default_rng(3)
@@ -130,6 +151,17 @@ class WithTheConf(unittest.TestCase):
             parts.append(s.accept(x[i : i + k]))
             i += k
         np.testing.assert_array_equal(np.concatenate(parts), self.m.compute(x))
+
+    def test_stream_equals_whole_however_cut_with_silence(self) -> None:
+        # Speech-like noise, then digital silence: the dither noise is keyed by
+        # frame, so every way of cutting the audio gives the same features.
+        rng = np.random.default_rng(5)
+        x = np.concatenate([rng.normal(0, 2000, 16000), np.zeros(8000)]).astype(np.float32)
+        whole = self.m.compute(x)
+        for cut in (1, 160, 400, 401, 2000, 3999, 4000, 24000):
+            s = self.m.stream()
+            got = np.concatenate([s.accept(x[i : i + cut]) for i in range(0, len(x), cut)])
+            np.testing.assert_array_equal(got, whole, err_msg=f"cut {cut}")
 
     @unittest.skipUnless((TAPES / "AlphaVoxFullVoice.s16").is_file(), "golden tapes are not on disk; not run")
     def test_speed_on_a_tape(self) -> None:

@@ -169,7 +169,7 @@ class Reader:
         return out
 
 
-def open_kaldi(path: str | Path) -> Reader:
+def open_model(path: str | Path) -> Reader:
     """Open a binary model file. It must begin with the binary marker."""
     data = Path(path).read_bytes()
     if data[:2] != b"\x00B":

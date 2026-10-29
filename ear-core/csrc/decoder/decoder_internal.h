@@ -81,12 +81,12 @@ struct ec_dec {
 
   float last_cutoff, last_adaptive_beam, last_considered;
   int final_any;
-  float final_best;
+  float final_best, final_relative;
 
   RawLat lat;
 };
 
-void ec_final_costs(const ec_dec *d, int *any_final, float *best_with_final);
+void ec_final_costs(const ec_dec *d, int *any_final, float *best_with_final, float *relative);
 float ec_tok_final_cost(const ec_dec *d, int32_t t, int any_final);
 void ec_lat_free(RawLat *L);
 

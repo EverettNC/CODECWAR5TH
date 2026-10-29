@@ -203,6 +203,30 @@ class FinalCosts(GraphCase):
         self.assertAlmostEqual(bp.graph_cost, 3.0, places=6)
         self.assertAlmostEqual(bp.cost, 4.0, places=6)
 
+    def test_final_relative_cost(self) -> None:
+        dec = self.decoder(self.STATES)
+        self.assertEqual(dec.final_relative_cost(), math.inf)  # start state is not final
+        dec.advance(frames({FWD(4) - 1: -1.0}))
+        # best without final: 0.0 (state 1); best with final: 1.0 + 3.0 (state 2)
+        self.assertAlmostEqual(dec.final_relative_cost(), 4.0, places=6)
+        dec.finalize()
+        self.assertEqual(dec.frame_tokens(1), 1)  # state 1 is pruned away...
+        self.assertAlmostEqual(dec.final_relative_cost(), 4.0, places=6)  # ...the value is kept
+
+    def test_final_relative_cost_zero_when_the_best_token_is_final(self) -> None:
+        states = [(INF, [(FWD(1), 1, 0.0, 1), (FWD(4), 2, 0.0, 2)]), (0.0, []), (INF, [])]
+        dec = self.decoder(states)
+        dec.advance(frames({FWD(4) - 1: -1.0}))
+        self.assertEqual(dec.final_relative_cost(), 0.0)
+
+    def test_final_relative_cost_infinite_when_nothing_is_final(self) -> None:
+        states = [(INF, [(FWD(1), 1, 0.0, 1), (FWD(4), 2, 0.0, 2)]), (INF, []), (INF, [])]
+        dec = self.decoder(states)
+        dec.advance(frames({FWD(4) - 1: -1.0}))
+        self.assertEqual(dec.final_relative_cost(), math.inf)
+        dec.finalize()
+        self.assertEqual(dec.final_relative_cost(), math.inf)
+
     def test_nothing_final_means_every_end_counts(self) -> None:
         states = [(INF, [(FWD(1), 1, 0.0, 1), (FWD(4), 2, 0.0, 2)]), (INF, []), (INF, [])]
         dec = self.decoder(states)
@@ -242,6 +266,27 @@ class WordBoundaries(GraphCase):
         self.assertEqual(bp.word_start.tolist(), [2, 7])
         self.assertEqual(bp.word_end.tolist(), [7, 9])
 
+    def test_streaming_chunks_including_empty_ones(self) -> None:
+        dec = self.decoder(self.linear())
+        empty = np.zeros((0, M.num_pdfs), dtype=np.float32)
+        dec.advance(empty)
+        self.assertEqual(dec.frames_decoded, 0)
+        self.assertEqual(dec.best_path(final=False).tids.tolist(), [])
+        n = len(self.TIDS)
+        for chunk in (frames(*([{}] * 4)), empty, frames(*([{}] * (n - 4))), empty):
+            dec.advance(chunk)
+            bp = dec.best_path(final=False)
+            self.assertEqual(len(bp.tids), dec.frames_decoded)
+            self.assertEqual(bp.tids.tolist(), self.TIDS[: dec.frames_decoded])
+        self.assertEqual(dec.frames_decoded, n)
+        dec.finalize()
+        bp = dec.best_path(final=True)
+        self.assertEqual(bp.words.tolist(), [1, 2])
+        self.assertEqual(dec.word_posteriors(final=True).tolist(), [1.0, 1.0])
+        with self.assertRaisesRegex(DecoderError, "finalized"):
+            dec.advance(frames({}))
+        dec.advance(empty)  # nothing to add is not an error
+
     def test_trailing_silence(self) -> None:
         dec = self.decoder(self.linear())
         dec.advance(frames({}, {}))
@@ -263,11 +308,11 @@ class Posteriors(GraphCase):
 
     def test_two_candidates_in_one_slot(self) -> None:
         for c in (0.25, 1.5, 4.0):
-            for live, scale in ((False, 1.0), (True, LIVE_GRAPH_SCALE)):
+            for scale in (1.0, LIVE_GRAPH_SCALE):
                 dec = self.decoder(self.two_words(c))
                 dec.advance(frames({}))
                 self.assertEqual(dec.best_path().words.tolist(), [1])
-                conf, stats = dec.word_posteriors(live_graph_scale=live, with_stats=True)
+                conf, stats = dec.word_posteriors(graph_scale=scale, with_stats=True)
                 want = 1.0 / (1.0 + math.exp(-float(np.float32(c) * np.float32(scale))))
                 self.assertAlmostEqual(float(conf[0]), want, places=6)
                 self.assertLess(stats[3], 1e-9)
@@ -278,9 +323,11 @@ class Posteriors(GraphCase):
         dec.advance(frames({}))
         plain = float(dec.word_posteriors()[0])
         self.assertAlmostEqual(plain, 1.0 / (1.0 + math.exp(-2.0)), places=6)
-        live = float(dec.word_posteriors(live_graph_scale=True)[0])
+        live = float(dec.word_posteriors(graph_scale=LIVE_GRAPH_SCALE)[0])
         self.assertAlmostEqual(live, 1.0 / (1.0 + math.exp(-1.8)), places=6)
         self.assertLess(live, plain)  # a flatter graph spreads the posterior
+        with self.assertRaises(ValueError):
+            dec.word_posteriors(graph_scale=0.0)
 
     def test_a_candidate_outside_the_lattice_beam_is_gone(self) -> None:
         dec = self.decoder(self.two_words(7.0), lattice_beam=6.0)

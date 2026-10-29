@@ -39,6 +39,9 @@ int ec_dec_advance(ec_dec *d, const float *loglikes, int32_t num_frames, int32_t
 int32_t ec_dec_frames_decoded(const ec_dec *d);
 int ec_dec_finalize(ec_dec *d);
 int32_t ec_dec_is_finalized(const ec_dec *d);
+/* Best cost with final costs minus best cost without, on the newest frame;
+ * infinity when no active token has a final cost. Kept from finalize on. */
+float ec_dec_final_relative_cost(const ec_dec *d);
 /* tokens alive in the list of frame f (0..frames_decoded) */
 int32_t ec_dec_frame_tokens(const ec_dec *d, int32_t f);
 /* the last emitting step: [cost_cutoff, adaptive_beam, tokens considered] */

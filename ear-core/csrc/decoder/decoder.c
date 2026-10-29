@@ -532,8 +532,10 @@ static void prune_active_tokens(ec_dec *d, float delta) {
 
 /* Final costs on the newest frame. any_final says whether any token sits on a
  * state with a finite final weight; best_with_final is the best tot_cost plus
- * final cost (or the best tot_cost when nothing is final). */
-void ec_final_costs(const ec_dec *d, int *any_final, float *best_with_final) {
+ * final cost (or the best tot_cost when nothing is final); relative is the
+ * best cost with final costs minus the best cost without them, infinity when
+ * no token has a final cost. */
+void ec_final_costs(const ec_dec *d, int *any_final, float *best_with_final, float *relative) {
   float best = INFINITY, bwf = INFINITY;
   int anyf = 0;
   for (int32_t t = d->frames[d->nframes].toks; t >= 0; t = d->toks[t].next) {
@@ -545,6 +547,7 @@ void ec_final_costs(const ec_dec *d, int *any_final, float *best_with_final) {
   }
   *any_final = anyf;
   *best_with_final = bwf != INFINITY ? bwf : best;
+  if (relative) *relative = (best == INFINITY && bwf == INFINITY) ? INFINITY : bwf - best;
 }
 
 float ec_tok_final_cost(const ec_dec *d, int32_t t, int any_final) {
@@ -556,9 +559,11 @@ static void prune_forward_links_final(ec_dec *d) {
   int32_t f = d->nframes;
   int any_final;
   float best;
-  ec_final_costs(d, &any_final, &best);
+  float relative;
+  ec_final_costs(d, &any_final, &best, &relative);
   d->final_any = any_final;
   d->final_best = best;
+  d->final_relative = relative;
   int changed = 1;
   while (changed) {
     changed = 0;
@@ -650,6 +655,15 @@ int32_t ec_dec_frame_tokens(const ec_dec *d, int32_t f) {
   int32_t n = 0;
   for (int32_t t = d->frames[f].toks; t >= 0; t = d->toks[t].next) n++;
   return n;
+}
+
+float ec_dec_final_relative_cost(const ec_dec *d) {
+  if (!d->initialized) return INFINITY;
+  if (d->finalized) return d->final_relative;
+  int any_final;
+  float best, relative;
+  ec_final_costs(d, &any_final, &best, &relative);
+  return relative;
 }
 
 void ec_dec_last_cutoff(const ec_dec *d, float *out3) {

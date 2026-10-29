@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from earcore.decoder import Decoder, DecoderError, Graph, phone_spans  # noqa: E402
+from earcore.decoder import LIVE_GRAPH_SCALE, Decoder, DecoderError, Graph, phone_spans  # noqa: E402
 from tests.fstfile import INF, TinyModel, write_const_fst, write_graph_dir  # noqa: E402
 
 M = TinyModel(5)  # phones 1..5, tids 1..10, pdfs 0..9
@@ -263,19 +263,29 @@ class Posteriors(GraphCase):
 
     def test_two_candidates_in_one_slot(self) -> None:
         for c in (0.25, 1.5, 4.0):
-            for scale in (1.0, 0.9):
+            for live, scale in ((False, 1.0), (True, LIVE_GRAPH_SCALE)):
                 dec = self.decoder(self.two_words(c))
                 dec.advance(frames({}))
                 self.assertEqual(dec.best_path().words.tolist(), [1])
-                conf, stats = dec.word_posteriors(graph_scale=scale, with_stats=True)
-                want = 1.0 / (1.0 + math.exp(-np.float32(c * scale)))
+                conf, stats = dec.word_posteriors(live_graph_scale=live, with_stats=True)
+                want = 1.0 / (1.0 + math.exp(-float(np.float32(c) * np.float32(scale))))
                 self.assertAlmostEqual(float(conf[0]), want, places=6)
                 self.assertLess(stats[3], 1e-9)
+
+    def test_graph_costs_are_unscaled_unless_asked(self) -> None:
+        self.assertEqual(LIVE_GRAPH_SCALE, 0.9)
+        dec = self.decoder(self.two_words(2.0))
+        dec.advance(frames({}))
+        plain = float(dec.word_posteriors()[0])
+        self.assertAlmostEqual(plain, 1.0 / (1.0 + math.exp(-2.0)), places=6)
+        live = float(dec.word_posteriors(live_graph_scale=True)[0])
+        self.assertAlmostEqual(live, 1.0 / (1.0 + math.exp(-1.8)), places=6)
+        self.assertLess(live, plain)  # a flatter graph spreads the posterior
 
     def test_a_candidate_outside_the_lattice_beam_is_gone(self) -> None:
         dec = self.decoder(self.two_words(7.0), lattice_beam=6.0)
         dec.advance(frames({}))
-        conf, stats = dec.word_posteriors(graph_scale=1.0, with_stats=True)
+        conf, stats = dec.word_posteriors(with_stats=True)
         self.assertEqual(conf.tolist(), [1.0])
         self.assertEqual(stats[1], 1)  # one word arc left
 
@@ -290,7 +300,7 @@ class Posteriors(GraphCase):
             dec = self.decoder(states)
             dec.advance(frames({}, {}))
             self.assertEqual(dec.best_path().words.tolist(), [1, 3])
-            conf, stats = dec.word_posteriors(graph_scale=1.0, with_stats=True)
+            conf, stats = dec.word_posteriors(with_stats=True)
             self.assertAlmostEqual(float(conf[0]), 1.0, places=6)
             self.assertAlmostEqual(float(conf[1]), 1.0 / (1.0 + math.exp(-d)), places=6)
             self.assertLess(stats[3], 1e-9)
@@ -317,7 +327,7 @@ class Posteriors(GraphCase):
         self.assertAlmostEqual(bp.cost, cost[best], places=5)
         z = sum(math.exp(-c) for c in cost.values())
         want = [sum(math.exp(-c) for k, c in cost.items() if k[i] == best[i]) / z for i in range(2)]
-        conf = dec.word_posteriors(graph_scale=1.0)
+        conf = dec.word_posteriors()
         np.testing.assert_allclose(conf, want, atol=1e-6)
 
 

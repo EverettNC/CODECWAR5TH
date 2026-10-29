@@ -56,6 +56,7 @@ _dec_advance = _sig("ec_dec_advance", C.c_int, C.c_void_p, _f32p, C.c_int32, C.c
 _dec_frames = _sig("ec_dec_frames_decoded", C.c_int32, C.c_void_p)
 _dec_finalize = _sig("ec_dec_finalize", C.c_int, C.c_void_p)
 _dec_is_final = _sig("ec_dec_is_finalized", C.c_int32, C.c_void_p)
+_dec_final_rel = _sig("ec_dec_final_relative_cost", C.c_float, C.c_void_p)
 _dec_frame_tokens = _sig("ec_dec_frame_tokens", C.c_int32, C.c_void_p, C.c_int32)
 _dec_last_cutoff = _sig("ec_dec_last_cutoff", None, C.c_void_p, _f32p)
 _dec_bytes = _sig("ec_dec_bytes", C.c_int64, C.c_void_p)
@@ -65,9 +66,9 @@ _dec_word_post = _sig("ec_dec_word_posteriors", C.c_int, C.c_void_p, C.c_int32, 
                       C.c_float, _f32p, _f64p)
 
 # The live ear multiplies every graph cost by 0.9 before it computes its MBR
-# confidences (and its n-best scores). word_posteriors(live_graph_scale=True)
-# does the same, so the two can be compared; by default graph costs are used
-# as they are.
+# confidences (and its n-best scores). word_posteriors(graph_scale=
+# LIVE_GRAPH_SCALE) does the same, so the two can be compared; by default
+# graph costs are used as they are.
 LIVE_GRAPH_SCALE = 0.9
 
 BOUNDARY_TYPES = {"nonword": 0, "begin": 1, "end": 2, "internal": 3, "singleton": 4}
@@ -224,6 +225,12 @@ class Decoder:
     def finalized(self) -> bool:
         return bool(_dec_is_final(self._h))
 
+    def final_relative_cost(self) -> float:
+        """Best cost with final costs included minus best cost without them,
+        over the newest frame's tokens; infinity when no active token has a
+        final cost. After finalize it is the value finalize saw."""
+        return float(_dec_final_rel(self._h))
+
     def finalize(self) -> None:
         """Final pruning with final costs. No frames can be added after this."""
         self._check(_dec_finalize(self._h))
@@ -277,14 +284,13 @@ class Decoder:
             n += 1
         return n
 
-    def word_posteriors(self, final: bool = True, live_graph_scale: bool = False,
+    def word_posteriors(self, final: bool = True, graph_scale: float = 1.0,
                         with_stats: bool = False):
         """Confidence of each best-path word: its MBR posterior in the word lattice.
 
         With final=True the decoding is finalized first (final costs, final
-        pruning). With live_graph_scale=True graph costs are multiplied by
-        LIVE_GRAPH_SCALE first, as the live ear does; off, they are used as
-        they are. Returns float32 confidences, one per best_path(final).words,
+        pruning). Graph costs are multiplied by graph_scale first: 1.0 uses
+        them as they are; LIVE_GRAPH_SCALE (0.9) is what the live ear uses. Returns float32 confidences, one per best_path(final).words,
         and with with_stats also (lattice states, lattice arcs, raw arcs,
         largest deviation of a bin's total posterior from one).
         """
@@ -294,8 +300,9 @@ class Decoder:
         conf = np.zeros(max(len(words), 1), dtype=np.float32)
         stats = np.zeros(4, dtype=np.float64)
         w = np.ascontiguousarray(words if len(words) else np.zeros(1, np.int32), dtype=np.int32)
-        scale = LIVE_GRAPH_SCALE if live_graph_scale else 1.0
-        self._check(_dec_word_post(self._h, 1 if final else 0, w, len(words), scale, conf, stats))
+        if not (graph_scale > 0.0 and np.isfinite(graph_scale)):
+            raise ValueError("graph_scale must be a positive finite number")
+        self._check(_dec_word_post(self._h, 1 if final else 0, w, len(words), float(graph_scale), conf, stats))
         conf = conf[: len(words)]
         if with_stats:
             return conf, (int(stats[0]), int(stats[1]), int(stats[2]), float(stats[3]))

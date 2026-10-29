@@ -118,7 +118,7 @@ static int build_raw(ec_dec *d, int use_final) {
     if (d->finalized) any_final = d->final_any;
     else {
       float bw;
-      ec_final_costs(d, &any_final, &bw);
+      ec_final_costs(d, &any_final, &bw, NULL);
     }
   }
   int32_t na = 0;

@@ -416,6 +416,19 @@ export type VoiceMeasures = {
   shimmer: number;
   jitter_carried: number;
   shimmer_carried: number;
+  /**
+   * What a STITCHED sentence is rendered with. Joins, time scaling and range
+   * scaling change a sentence's periodicity, so a new sentence rendered with
+   * the recordings' own aperiodicity and carried values came out noisier and
+   * rougher than the recordings (AlphaVox, 2026-10-28: HNR 7.5 against 10.1
+   * dB). The build renders held-out calibration sentences (never the test
+   * sentences) at a range of aperiodicities, measures what the stitched
+   * frames carry, and keeps the aperiodicity whose renderings measure
+   * closest to the recordings. applyVoice uses these three.
+   */
+  stitched_aperiodicity: number;
+  stitched_jitter_carried: number;
+  stitched_shimmer_carried: number;
   /** For the report: harmonics-to-noise ratio and cepstral peak prominence of the recordings, dB. */
   hnr_db: number;
   cpp_db: number;
@@ -469,7 +482,12 @@ const REACH = { breath: 1, intonation: 1, jitter: 1, shimmer: 1, prosody: 0.5, a
 const CLAMP = {
   /** pitch range factor */ range: [0.5, 2] as const,
   /** time factor */ time: [0.6, 1.6] as const,
-  /** aperiodicity factor */ ap: [0.25, 4] as const,
+  /**
+   * aperiodicity factor. 0.01 at the low end: AlphaVox's stitched frames carry
+   * voiced aperiodicity 0.37 to 0.56, and the calibrated stitched_aperiodicity
+   * needs about x0.02 to x0.04 of that; the old 0.25 held every sentence of
+   * the 24 at x0.25, four to ten times the breath the voice has.
+   */ ap: [0.01, 4] as const,
   /** envelope correction toward the voice's long-term average, dB each way */ ltas_db: 6,
   /** a session's level brought to the voice's level, dB each way */ level_db: 12,
 };
@@ -486,6 +504,14 @@ const F0_RANGE = [60, 400] as const;
  * holds for shimmer. So a local value v is rendered as sd = v / 1.128.
  */
 const LOCAL_PER_SD = 2 / Math.sqrt(Math.PI);
+/**
+ * Intonation scales the pitch contour smoothed over +-4 frames (+-20 ms) and
+ * keeps each frame's movement around it as it was. Movement faster than that
+ * is the cycle-to-cycle wobble Praat reads as jitter, not intonation; scaled
+ * with the range (up to x2) it raised the 24 sentences' jitter from 3.3% to
+ * 3.6% against the recordings' 2.9%.
+ */
+const CONTOUR_HALF = 4;
 const VOWELS = new Set(PHONES.filter((p) => p.kind === "vowel").map((p) => p.id));
 
 function clamp(v: number, lo: number, hi: number) {
@@ -506,6 +532,7 @@ export function checkMeasures(m: Partial<VoiceMeasures>): VoiceMeasures {
   const need: (keyof VoiceMeasures)[] = [
     "f0_median_hz", "phrase_range_st", "syllable_rate", "voiced_aperiodicity", "ltas_db", "level_db",
     "jitter", "shimmer", "jitter_carried", "shimmer_carried", "hnr_db", "cpp_db",
+    "stitched_aperiodicity", "stitched_jitter_carried", "stitched_shimmer_carried",
   ];
   const bad = need.filter((k) => {
     const v = m[k];
@@ -528,7 +555,7 @@ export function checkControls(c: Partial<Controls>): Controls {
   if (c.affect !== "neutral")
     throw new StitchRefused(
       `affect "${c.affect}" is not applied: this mouth has no affect input of its own, and mapping an emotion onto ` +
-        `pitch or rate here would be an invented mapping (Everett's call). Set the named controls the affect stands ` +
+        `pitch or rate here would be an invented mapping (the project's ruling). Set the named controls the affect stands ` +
         `for and pass affect "neutral".`,
       ["affect"],
     );
@@ -593,7 +620,7 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   const cad = span(c.cadence, REACH.cadence);
   const wantRate = m.syllable_rate * c.rate * cad;
   const timeFactor = clamp(rate / wantRate, CLAMP.time[0], CLAMP.time[1]);
-  const consonant = span(c.articulation, REACH.articulation / 2);
+  const consonant = span(c.articulation, REACH.articulation);
   const stretch = phones.map((p) => (p === "SIL" ? 1 / cad : VOWELS.has(p) ? timeFactor : timeFactor * consonant));
   ({ t, phones, recOf } = resample(t, phones, recOf, stretch));
   applied.push({ name: "rate", measured: m.syllable_rate, control: c.rate, applied: `syllable rate ${rate.toFixed(2)}/s -> ${(rate / timeFactor).toFixed(2)}/s (time x${timeFactor.toFixed(3)})`, value: timeFactor });
@@ -609,8 +636,10 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   const rangeFactor = st0.length > 1 && rng > 0 ? clamp(wantRange / rng, CLAMP.range[0], CLAMP.range[1]) : 1;
   const centreHz = c.f0 ?? m.f0_median_hz;
   const centre = 12 * Math.log2(centreHz);
-  for (let i = 0; i < t.n; i++) if (t.f0[i]! > 0) t.f0[i] = 2 ** ((centre + (12 * Math.log2(t.f0[i]!) - med) * rangeFactor) / 12);
-  applied.push({ name: "intonation", measured: m.phrase_range_st, control: c.intonation, applied: `pitch range ${rng.toFixed(2)} st x${rangeFactor.toFixed(3)} (the recordings' own movement, scaled)`, value: rangeFactor });
+  const smooth = smoothContour(t.f0, CONTOUR_HALF);
+  for (let i = 0; i < t.n; i++)
+    if (t.f0[i]! > 0) t.f0[i] = 2 ** ((centre + (smooth[i]! - med) * rangeFactor + (12 * Math.log2(t.f0[i]!) - smooth[i]!)) / 12);
+  applied.push({ name: "intonation", measured: m.phrase_range_st, control: c.intonation, applied: `pitch range ${rng.toFixed(2)} st x${rangeFactor.toFixed(3)} (the recordings' own movement, scaled; movement within +-${CONTOUR_HALF} frames kept)`, value: rangeFactor });
   applied.push({ name: "f0", measured: m.f0_median_hz, control: c.f0, applied: `median ${(2 ** (med / 12)).toFixed(1)} -> ${centreHz.toFixed(1)} Hz`, value: centreHz });
 
   // Breath: the noise in the voiced frames, to the voice's measured aperiodicity.
@@ -623,11 +652,11 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
         apSum += t.ap[i * AP_BANDS + b]!;
         apN++;
       }
-  const apNow = apN ? apSum / apN : m.voiced_aperiodicity;
-  const apWant = m.voiced_aperiodicity * span(c.breath, REACH.breath);
+  const apNow = apN ? apSum / apN : m.stitched_aperiodicity;
+  const apWant = m.stitched_aperiodicity * span(c.breath, REACH.breath);
   const apFactor = apNow > 0 ? clamp(apWant / apNow, CLAMP.ap[0], CLAMP.ap[1]) : 1;
   for (let i = 0; i < t.n; i++) if (t.f0[i]! > 0) for (let b = 0; b < AP_BANDS; b++) t.ap[i * AP_BANDS + b] = Math.min(1, t.ap[i * AP_BANDS + b]! * apFactor);
-  applied.push({ name: "breath", measured: m.voiced_aperiodicity, control: c.breath, applied: `voiced aperiodicity ${apNow.toFixed(3)} x${apFactor.toFixed(3)} (recordings: HNR ${m.hnr_db.toFixed(1)} dB, CPP ${m.cpp_db.toFixed(1)} dB)`, value: apFactor });
+  applied.push({ name: "breath", measured: m.stitched_aperiodicity, control: c.breath, applied: `voiced aperiodicity ${apNow.toFixed(3)} x${apFactor.toFixed(3)} to ${apWant.toFixed(4)} (calibrated for stitched speech; recordings: HNR ${m.hnr_db.toFixed(1)} dB, CPP ${m.cpp_db.toFixed(1)} dB)`, value: apFactor });
 
   // Resonance and timbre. Each session's envelope and level to the voice's
   // (smoothed over 9 grid points, clamped), so units from different sessions
@@ -693,24 +722,64 @@ export function applyVoice(st: Stitched, measuresIn: Partial<VoiceMeasures>, con
   applied.push({ name: "prosody", measured: "level contrast of the recorded units", control: c.prosody, applied: `level contrast x${ps.toFixed(3)}`, value: ps });
 
   // Jitter and shimmer: the measured value (scaled by the control), less what
-  // the frames already carry, added per glottal cycle by the renderer.
+  // stitched frames already carry, added per glottal cycle by the renderer.
+  // Stitched frames may already carry more than the voice measures (AlphaVox's
+  // shimmer, 2026-10-28: 10.2% carried, 9.65% measured). The renderer cannot
+  // take it away. At the neutral control or above, nothing is added and the
+  // entry says so; the fidelity gate holds the result to the recordings'
+  // spread. A control below neutral asks for steadier than the frames are,
+  // and is refused.
   const perturb = (name: "jitter" | "shimmer", measured: number, carried: number, control: number) => {
     const want = measured * span(control, REACH[name]);
-    if (want < carried)
+    if (want < carried && control < 0.5)
       throw new StitchRefused(`${name} ${want.toFixed(4)} is below the ${carried.toFixed(4)} the voice's own frames carry; it cannot be rendered lower`, [name]);
+    if (want <= carried) {
+      applied.push({ name, measured, control, applied: `${carried.toFixed(4)} carried by the frames, at or above the ${want.toFixed(4)} wanted: nothing added (the frames cannot be made steadier)`, value: 0 });
+      return 0;
+    }
     const sd = Math.sqrt(want ** 2 - carried ** 2) / LOCAL_PER_SD;
     if (sd > 0.2) throw new StitchRefused(`${name} ${want.toFixed(4)} is beyond what the renderer takes (per-cycle sd 0.2)`, [name]);
     applied.push({ name, measured, control, applied: `${carried.toFixed(4)} carried by the frames; per-cycle sd ${sd.toFixed(4)} added for ${want.toFixed(4)}`, value: sd });
     return sd;
   };
-  const jit = perturb("jitter", m.jitter, m.jitter_carried, c.jitter);
-  const shim = perturb("shimmer", m.shimmer, m.shimmer_carried, c.shimmer);
+  const jit = perturb("jitter", m.jitter, m.stitched_jitter_carried, c.jitter);
+  const shim = perturb("shimmer", m.shimmer, m.stitched_shimmer_carried, c.shimmer);
   applied.push({ name: "affect", measured: "none: affect is carried by the named controls", control: c.affect, applied: "neutral: the voice as measured", value: 0 });
   return { track: t, phones, jitter: jit, shimmer: shim, applied };
 }
 
 /** Bands of the aperiodicity below 4 kHz (edges 0, 600, 1200, 2000, 3000, 4000). */
 const AP_LOW_BANDS = 5;
+
+/**
+ * Each voiced frame's pitch in semitones, averaged over +-half frames of its
+ * own voiced run (never across unvoiced frames). Unvoiced frames read 0.
+ * Summed left to right from 0, the order christman_sound/stitch.py sums in.
+ */
+export function smoothContour(f0: ArrayLike<number>, half: number): Float64Array {
+  const n = f0.length;
+  const st = new Float64Array(n);
+  for (let i = 0; i < n; i++) st[i] = f0[i]! > 0 ? 12 * Math.log2(f0[i]!) : 0;
+  const out = new Float64Array(n);
+  let i = 0;
+  while (i < n) {
+    if (!(f0[i]! > 0)) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && f0[j]! > 0) j++;
+    for (let k = i; k < j; k++) {
+      const a = Math.max(i, k - half);
+      const b = Math.min(j, k + half + 1);
+      let s = 0;
+      for (let q = a; q < b; q++) s += st[q]!;
+      out[k] = s / (b - a);
+    }
+    i = j;
+  }
+  return out;
+}
 
 /** Resample the frame sequence in time: frame i lasts stretch[i] frames. Pitch moves with the frames; voicing is never invented. */
 function resample(t: FrameTrack, phones: string[], recOf: number[], stretch: number[]) {

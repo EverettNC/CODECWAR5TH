@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileAudio, Play, Square } from "lucide-react";
 import { Panel, Stat } from "@/components/panel";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,17 @@ import { renderFrames } from "@/lib/audio/vocoder";
 
 /** Longest recording the room measures at once: 12 s, about 2,400 frames, under a few seconds of work in the tab. */
 const MAX_SECONDS = 12;
+/**
+ * The room renders a recording from its own frames alone. No jitter or
+ * shimmer is added: whatever of either the recording has is carried in its
+ * frames' pitch and level, and this tab has no Praat to measure how much.
+ * The mouth (stitch.ts) adds them from a voice's measured profile; this room
+ * does not, and says so on screen.
+ */
+const ADDED_JITTER = 0;
+const ADDED_SHIMMER = 0;
+/** Nothing loaded yet: the tapes draw nothing (not another room's last sound). */
+const NO_SOUND = new Float32Array(0);
 
 type Measured = { name: string; source: Float32Array; track: FrameTrack; rendered: Float32Array; ms: number };
 
@@ -31,6 +42,21 @@ export function FramesRoom() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Leaving the room stops what it is playing and closes its audio.
+  useEffect(
+    () => () => {
+      try {
+        srcRef.current?.stop();
+      } catch {
+        // already stopped
+      }
+      srcRef.current = null;
+      void ctxRef.current?.close();
+      ctxRef.current = null;
+    },
+    [],
+  );
+
   const ctx = () => {
     if (!ctxRef.current) ctxRef.current = new AudioContext({ sampleRate: FRAME_SR });
     return ctxRef.current;
@@ -52,8 +78,8 @@ export function FramesRoom() {
         envHz: envGridHz(FRAME_SR),
         ap: track.ap,
         bandEdges: AP_EDGES,
-        jitter: 0,
-        shimmer: 0,
+        jitter: ADDED_JITTER,
+        shimmer: ADDED_SHIMMER,
         seed: 1,
       });
       setM({ name: file.name, source: Float32Array.from(ch), track, rendered, ms: performance.now() - t0 });
@@ -77,7 +103,11 @@ export function FramesRoom() {
     srcRef.current = s;
   };
   const stop = () => {
-    srcRef.current?.stop();
+    try {
+      srcRef.current?.stop();
+    } catch {
+      // already stopped
+    }
     srcRef.current = null;
   };
 
@@ -130,10 +160,10 @@ export function FramesRoom() {
         {error ? <p className="mt-3 text-sm text-warn">Not measured: {error}</p> : null}
         <div className="mt-4 space-y-2">
           <div className="overflow-hidden rounded-md bg-elevated">
-            <Waveform pcm={m?.source} height={72} ink="linen" />
+            <Waveform pcm={m?.source ?? NO_SOUND} height={72} ink="linen" playhead={0} />
           </div>
           <div className="overflow-hidden rounded-md bg-elevated">
-            <Waveform pcm={m?.rendered} height={72} />
+            <Waveform pcm={m?.rendered ?? NO_SOUND} height={72} playhead={0} />
           </div>
         </div>
       </Panel>
@@ -149,7 +179,8 @@ export function FramesRoom() {
         </div>
         <p className="mt-4 text-sm text-muted">
           Every 5 ms: pitch, 96 envelope points, aperiodicity in {AP_BANDS} bands. The second
-          tape is made from those numbers and nothing else.
+          tape is made from those numbers and nothing else: no jitter or shimmer is added,
+          and none is measured here. What the recording has of either rides in its frames.
         </p>
       </Panel>
     </div>

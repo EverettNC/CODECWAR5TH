@@ -115,6 +115,18 @@ class Reader:
         dt = {1: np.int8, 2: np.int16, 4: np.int32, 8: np.int64}[size]
         return np.frombuffer(self._raw(n * size), dtype=dt).astype(np.int32)
 
+    def pair_vector(self) -> np.ndarray:
+        """Integer pairs: one size byte, an int32 count n, then n raw pairs. Shape (n, 2)."""
+        self.skip_space()
+        size = self.buf[self.pos]
+        if size != 4:
+            raise self._fail(f"pair size byte {size}, wanted 4")
+        self.pos += 1
+        n = struct.unpack("<i", self._raw(4))[0]
+        if n < 0:
+            raise self._fail(f"pair count {n}")
+        return np.frombuffer(self._raw(n * 8), dtype="<i4").reshape(n, 2).astype(np.int32)
+
     # ---- containers -------------------------------------------------
     def vector(self) -> np.ndarray:
         tok = self.token()

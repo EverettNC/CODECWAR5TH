@@ -64,9 +64,10 @@ _dec_path_arcs = _sig("ec_dec_path_arcs", None, C.c_void_p, _i32p, _i32p, _f32p,
 _dec_word_post = _sig("ec_dec_word_posteriors", C.c_int, C.c_void_p, C.c_int32, _i32p, C.c_int32,
                       C.c_float, _f32p, _f64p)
 
-# The live recognizer multiplies every graph cost by 0.9 before it computes
-# its MBR confidences (and its n-best scores). word_posteriors() uses the same
-# scale by default so the two can be compared.
+# The live ear multiplies every graph cost by 0.9 before it computes its MBR
+# confidences (and its n-best scores). word_posteriors(live_graph_scale=True)
+# does the same, so the two can be compared; by default graph costs are used
+# as they are.
 LIVE_GRAPH_SCALE = 0.9
 
 BOUNDARY_TYPES = {"nonword": 0, "begin": 1, "end": 2, "internal": 3, "singleton": 4}
@@ -276,12 +277,14 @@ class Decoder:
             n += 1
         return n
 
-    def word_posteriors(self, final: bool = True, graph_scale: float = LIVE_GRAPH_SCALE,
+    def word_posteriors(self, final: bool = True, live_graph_scale: bool = False,
                         with_stats: bool = False):
         """Confidence of each best-path word: its MBR posterior in the word lattice.
 
         With final=True the decoding is finalized first (final costs, final
-        pruning). Returns float32 confidences, one per best_path(final).words,
+        pruning). With live_graph_scale=True graph costs are multiplied by
+        LIVE_GRAPH_SCALE first, as the live ear does; off, they are used as
+        they are. Returns float32 confidences, one per best_path(final).words,
         and with with_stats also (lattice states, lattice arcs, raw arcs,
         largest deviation of a bin's total posterior from one).
         """
@@ -291,7 +294,8 @@ class Decoder:
         conf = np.zeros(max(len(words), 1), dtype=np.float32)
         stats = np.zeros(4, dtype=np.float64)
         w = np.ascontiguousarray(words if len(words) else np.zeros(1, np.int32), dtype=np.int32)
-        self._check(_dec_word_post(self._h, 1 if final else 0, w, len(words), graph_scale, conf, stats))
+        scale = LIVE_GRAPH_SCALE if live_graph_scale else 1.0
+        self._check(_dec_word_post(self._h, 1 if final else 0, w, len(words), scale, conf, stats))
         conf = conf[: len(words)]
         if with_stats:
             return conf, (int(stats[0]), int(stats[1]), int(stats[2]), float(stats[3]))

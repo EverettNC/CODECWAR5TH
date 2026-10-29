@@ -217,3 +217,31 @@ describe("smoothContour", () => {
     assert.ok(Math.abs(s[5]! - st(100)) < 1e-12);
   });
 });
+
+describe("sessions", () => {
+  it("brings two sessions to the voice's level with no step at the join between them", () => {
+    // Two recordings in two sessions, the second 7 dB louder; "mass" is only in
+    // the first and "tea" only in the second, so the sentence joins them.
+    const one = record([W.mass], 3, 0);
+    const two = record([W.tea], 5, 1);
+    for (let k = 0; k < two.track.envDb.length; k++) two.track.envDb[k]! += 7;
+    for (let k = 0; k < two.track.rmsDb.length; k++) two.track.rmsDb[k]! += 7;
+    const b = buildBank([one.track, two.track], [...one.tokens, ...two.tokens], 0.9);
+    const st = joinUnits(b, selectUnits(b, [W.mass, W.tea]));
+    assert.deepEqual([st.recOf[st.joinsAt[0]! - 1], st.recOf[st.joinsAt[0]!]], [0, 1]);
+    const stats = recordingStats(b, ["one", "two"]);
+    assert.ok(Math.abs(stats[1]!.level - stats[0]!.level - 7) < 0.01);
+    const m = { ...measures(b), ltas_db: Array.from(trackLtas(one.track)) };
+    const v = applyVoice(st, m, NEUTRAL_CONTROLS, stats);
+    const level = (i: number) => {
+      let s = 0;
+      for (let k = 0; k < ENV_POINTS; k++) s += v.track.envDb[i * ENV_POINTS + k]!;
+      return s / ENV_POINTS;
+    };
+    const j = v.phones.findIndex((p, i) => i > 0 && p === "T" && v.phones[i - 1] === "S");
+    assert.ok(j > 0);
+    // Each session's correction is smoothed across the join with the frames:
+    // before 2026-10-29 it was added after, and this join dropped 7.4 dB in one frame.
+    for (let i = j - 3; i <= j + 3; i++) assert.ok(Math.abs(level(i) - level(i - 1)) < 0.5, `${(level(i) - level(i - 1)).toFixed(2)} dB at frame ${i}`);
+  });
+});

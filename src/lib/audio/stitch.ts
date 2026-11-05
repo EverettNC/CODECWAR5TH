@@ -12,18 +12,27 @@
  *
  * Selection (unit selection over phones, Viterbi):
  *   target cost  a unit from the same word at the same place costs nothing;
- *                one from another word pays WORD; a different phone before
- *                or after it pays CONTEXT each; a word that opens or closes
- *                a phrase in the recording put where the sentence does not
- *                open or close pays EDGE; a length far from the phone's own
- *                median pays DURATION per natural-log unit.
+ *                one from another word pays WORD; a unit whose recording did
+ *                not go on into the phone the sentence needs next pays NEXT
+ *                (2026-11-05: the move from one sound into the next has to be
+ *                real recorded speech); a word that opens or closes a phrase
+ *                in the recording put where the sentence does not open or
+ *                close pays EDGE; a length far from the phone's own median
+ *                pays DURATION per natural-log unit.
  *   join cost    a unit followed by the unit that followed it in the
  *                recording joins for nothing, so whole words and runs of
- *                words come out whole; any other join pays BREAK plus how
- *                far the two sides are from the frames that really followed
- *                them (envelope dB / 10, pitch in semitones / 6, voicing).
- * Joins that are not in the recordings are smoothed over JOIN_SMOOTH frames
- * each side (envelope, aperiodicity, and pitch when both sides are voiced).
+ *                words come out whole. Any other join pays BREAK plus how far
+ *                apart the two sides are where the seam is cut (envelope
+ *                dB / 10, pitch in semitones / 6, voicing): in the middle of
+ *                the next phone when the previous unit's recording went on
+ *                into it, else at the edge between the phones, which pays
+ *                EDGE_SEAM more.
+ * Joining (2026-11-05): when the previous unit's recording went on into this
+ * phone, it carries on through the first half of this phone as recorded and
+ * this unit starts from its own middle, so the seam falls where the sound holds
+ * steady and the move into the phone is the recording's own. Joins that are not
+ * in the recordings are smoothed over JOIN_SMOOTH frames each side (envelope,
+ * aperiodicity, and pitch when both sides are voiced).
  * A phone the bank has never heard is not made up: the sentence is refused
  * and the phone is named.
  */
@@ -36,8 +45,23 @@ import { PHRASE_GAP_S, type Bank, type Unit } from "./bank.ts";
 export const COST = {
   /** A unit from another word: two context mismatches' worth, so a whole word wins over two well-fitting pieces. */
   WORD: 2.0,
-  /** Each side whose neighbouring phone differs: coarticulation is carried by the neighbours. */
-  CONTEXT: 1.0,
+  /**
+   * The unit does not go on, in its own recording, into the phone the sentence
+   * needs next. The move from one sound into the next is carried by the
+   * recording that made it, so the unit chosen for each phone should be one
+   * whose recording went on into the next phone: then the seam can fall in the
+   * middle of that next phone (joinUnits) and the move is real recorded speech.
+   * 3: more than a word mismatch, because a move into the right sound matters
+   * more to the ear than which word the piece came from. Measured 2026-11-05 on
+   * Christman-Sound's word ruler (98 sentences, 446 words, one being's frame
+   * voice), with the mid-phone seam: words heard by the Filament 78.7% -> 86.1%,
+   * words the recordings do not hold 46.2% -> 62.4%. The phone before costs
+   * nothing: with the seam in the middle of this phone, its first half comes
+   * from the previous unit's own recording, so that move is real already.
+   */
+  NEXT: 3.0,
+  /** A join that has to fall at the edge between two phones (no recording goes on into the next phone): 2 more. */
+  EDGE_SEAM: 2.0,
   /** A phrase edge in the wrong place carries the wrong pitch reset or final fall. */
   EDGE: 0.5,
   /** Per natural-log unit of length away from the phone's median: twice or half as long costs 0.35. */
@@ -120,8 +144,7 @@ export function phoneMedians(bank: Bank): Map<string, number> {
 function targetCost(u: Unit, t: Target, med: Map<string, number>) {
   let c = 0;
   if (u.word !== t.word || u.pos !== t.pos || u.wordLen !== t.wordLen) c += COST.WORD;
-  if (u.prev !== t.prev) c += COST.CONTEXT;
-  if (u.next !== t.next) c += COST.CONTEXT;
+  if (u.next !== t.next) c += COST.NEXT;
   if (t.first !== u.phraseStart) c += COST.EDGE;
   if (t.last !== u.phraseEnd) c += COST.EDGE;
   const m = med.get(u.phone) ?? 1;
@@ -140,17 +163,38 @@ function frameDist(a: FrameTrack, i: number, b: FrameTrack, j: number) {
   return c;
 }
 
+/** The frame in the middle of a unit: where a mid-phone seam is cut. */
+function mid(u: Unit) {
+  return u.start + ((u.end - u.start) >> 1);
+}
+
+/**
+ * The unit that carries u on into v's phone in u's own recording, when the
+ * seam between u and v can fall in the middle of v's phone; else null.
+ */
+function carriedInto(bank: Bank, u: Unit, v: Unit): Unit | null {
+  if (u.succ < 0) return null;
+  const s = bank.units[u.succ]!;
+  return s.phone === v.phone && s.end - s.start >= 2 && v.end - v.start >= 2 ? s : null;
+}
+
 function joinCost(bank: Bank, ui: number, vi: number) {
   const u = bank.units[ui]!;
   if (u.succ === vi) return 0;
   const v = bank.units[vi]!;
-  const tu = bank.tracks[u.rec]!;
   const tv = bank.tracks[v.rec]!;
+  const s = carriedInto(bank, u, v);
+  if (s) {
+    // The seam falls in the middle of v's phone: the last frame of the first
+    // half that u's recording carries on into, against v's middle frame.
+    return COST.BREAK + frameDist(bank.tracks[s.rec]!, mid(s) - 1, tv, mid(v));
+  }
+  const tu = bank.tracks[u.rec]!;
   // How far v's first frame is from the frame that really followed u, and
   // u's last frame from the frame that really came before v.
   const after = Math.min(u.end, tu.n - 1);
   const before = Math.max(v.start - 1, 0);
-  return COST.BREAK + 0.5 * (frameDist(tu, after, tv, v.start) + frameDist(tu, u.end - 1, tv, before));
+  return COST.EDGE_SEAM + COST.BREAK + 0.5 * (frameDist(tu, after, tv, v.start) + frameDist(tu, u.end - 1, tv, before));
 }
 
 /** Choose one recorded unit for every phone of the sentence. */
@@ -298,10 +342,25 @@ export function joinUnits(bank: Bank, sel: Selection): Stitched {
   const pauses = new Set(sel.pausesAfter);
   sel.units.forEach((ui, n) => {
     const u = bank.units[ui]!;
-    if (n > 0 && !pauses.has(n - 1) && bank.units[sel.units[n - 1]!]!.succ !== ui) joinsAt.push(f0.length);
+    let start = u.start;
+    if (n > 0 && !pauses.has(n - 1) && bank.units[sel.units[n - 1]!]!.succ !== ui) {
+      // A join the recordings do not hold. When the previous unit's recording
+      // went on into this phone, it carries on through the first half of this
+      // phone as recorded, and this unit starts from its middle: the seam
+      // falls in the middle of the phone, where the sound holds steady, and
+      // the move into it is real. Else the seam falls at the edge.
+      const s = carriedInto(bank, bank.units[sel.units[n - 1]!]!, u);
+      if (s) {
+        const ts = bank.tracks[s.rec]!;
+        rec = s.rec;
+        for (let i = s.start; i < mid(s); i++) push(ts, i, u.phone);
+        start = mid(u);
+      }
+      joinsAt.push(f0.length);
+    }
     const t = bank.tracks[u.rec]!;
     rec = u.rec;
-    for (let i = u.start; i < u.end; i++) push(t, i, u.phone);
+    for (let i = start; i < u.end; i++) push(t, i, u.phone);
     if (pauses.has(n)) {
       // The text pauses here: the recording's own pause, not a made-up silence.
       const [a, b] = pauseFrames(bank, u.rec);

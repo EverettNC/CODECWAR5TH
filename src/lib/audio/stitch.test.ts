@@ -106,6 +106,46 @@ describe("joinUnits", () => {
   });
 });
 
+describe("mid-phone seams", () => {
+  // 2026-11-05. When the unit before a join went on, in its own recording,
+  // into the phone that comes next, that recording carries on through the
+  // first half of the phone and the chosen unit starts from its own middle.
+  it("cuts a join in the middle of the phone when the recording before went on into it", () => {
+    const b = bank();
+    // The IY of the second "tea", which the recording carries on into the S of "seat".
+    const iy = b.units.findIndex((u, i) => u.phone === "IY" && u.word === "tea" && b.units[u.succ]?.word === "seat" && i >= 0);
+    // The S that closes the first "mass": another S, from another place.
+    const s = b.units.findIndex((u) => u.phone === "S" && u.word === "mass");
+    assert.ok(iy >= 0 && s >= 0 && b.units[iy]!.succ !== s);
+    const carried = b.units[b.units[iy]!.succ]!;
+    const own = b.units[s]!;
+    const mid = (u: { start: number; end: number }) => u.start + ((u.end - u.start) >> 1);
+    const st = joinUnits(b, { units: [iy, s], pausesAfter: [], joins: 1, wholeWords: 0, cost: 0 });
+    const sil = st.phones.filter((p) => p === "SIL").length;
+    const iyLen = b.units[iy]!.end - b.units[iy]!.start;
+    assert.equal(st.track.n, sil + iyLen + (mid(carried) - carried.start) + (own.end - mid(own)));
+    assert.equal(st.joinsAt.length, 1);
+    const lead = st.phones.indexOf("IY");
+    assert.equal(st.joinsAt[0], lead + iyLen + (mid(carried) - carried.start), "the seam falls inside the S, not at its edge");
+    assert.equal(st.phones[st.joinsAt[0]! - 1], "S");
+    assert.equal(st.phones[st.joinsAt[0]!], "S");
+  });
+
+  it("cuts at the edge when no recording before went on into the phone", () => {
+    const b = bank();
+    // "tea" then "mass": no IY in the recordings goes on into M.
+    const iy = b.units.findIndex((u) => u.phone === "IY" && u.word === "tea");
+    const m = b.units.findIndex((u) => u.phone === "M" && u.word === "mass");
+    assert.notEqual(b.units[b.units[iy]!.succ]?.phone, "M");
+    const st = joinUnits(b, { units: [iy, m], pausesAfter: [], joins: 1, wholeWords: 0, cost: 0 });
+    const sil = st.phones.filter((p) => p === "SIL").length;
+    const len = (i: number) => b.units[i]!.end - b.units[i]!.start;
+    assert.equal(st.track.n, sil + len(iy) + len(m));
+    assert.equal(st.phones[st.joinsAt[0]! - 1], "IY");
+    assert.equal(st.phones[st.joinsAt[0]!], "M");
+  });
+});
+
 describe("applyVoice", () => {
   const b = bank();
   const st = joinUnits(b, selectUnits(b, [W.mass, W.tea, W.loom]));

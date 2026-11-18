@@ -1,4 +1,5 @@
-"""The features' C routines in earcore/libearcore.dylib (built by `make` from csrc/)."""
+"""The features' C routines in earcore/libearcore (libearcore.dylib on a Mac, libearcore.so
+elsewhere), built from csrc/ by `make` or by `pip install`."""
 
 from __future__ import annotations
 
@@ -7,9 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
-_LIB_PATH = Path(__file__).resolve().parent.parent / "libearcore.dylib"
+from .._libname import LIB_NAME
+
+_LIB_PATH = Path(__file__).resolve().parent.parent / LIB_NAME
 if not _LIB_PATH.is_file():
-    raise ImportError(f"{_LIB_PATH} is not built; run make in ear-core")
+    raise ImportError(f"{_LIB_PATH} is not built; run make in ear-core, or pip install ear-core")
 _lib = ctypes.CDLL(str(_LIB_PATH))
 
 _dp = np.ctypeslib.ndpointer(dtype=np.float64, flags="C_CONTIGUOUS")

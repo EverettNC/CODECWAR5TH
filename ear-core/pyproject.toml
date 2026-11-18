@@ -1,0 +1,30 @@
+# ear-core as an installable package, so the Christman Sound package (and any
+# being) can install this ear with pip instead of reaching for a checkout.
+# pip compiles csrc/ into earcore/libearcore (build_native.py); nothing is run after it.
+#
+#   pip install "earcore @ git+https://github.com/EverettNC/CODECWAR5TH@<commit>#subdirectory=ear-core"
+
+[build-system]
+requires = ["setuptools>=70.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "earcore"
+version = "2026.11.18"
+description = "ear-core: Everett's own speech decoder. Reads a Vosk model folder and hears with our own MFCC, i-vectors, network and C graph search. No Kaldi runtime."
+requires-python = ">=3.10"
+authors = [{ name = "Everett Nathaniel Christman" }]
+# 1.26 is what AlphaVox runs; ear-core heard its four test tapes word for word
+# on it (2026-11-18). requirements.txt (the test venv) stays on numpy 2.
+dependencies = ["numpy>=1.26"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["earcore*"]
+
+[tool.setuptools.cmdclass]
+build = "build_native.build"
+build_earcore = "build_native.build_earcore"
+bdist_wheel = "build_native.bdist_wheel"

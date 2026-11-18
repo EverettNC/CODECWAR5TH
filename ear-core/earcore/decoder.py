@@ -22,7 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-_LIB_PATH = Path(__file__).with_name("libearcore.dylib")
+from ._libname import LIB_NAME
+
+_LIB_PATH = Path(__file__).with_name(LIB_NAME)
 _lib = C.CDLL(str(_LIB_PATH))
 
 _i32p = np.ctypeslib.ndpointer(dtype=np.int32, flags="C_CONTIGUOUS")
